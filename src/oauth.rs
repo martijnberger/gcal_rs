@@ -140,7 +140,7 @@ impl OAuth {
                     .map(|(_, state)| state.into_owned())
             }
             // // A very naive implementation of the redirect server.
-            let listener = TcpListener::bind("127.0.0.1:5000").await.unwrap();
+            let listener = TcpListener::bind("0.0.0.0:8555").await.unwrap();
             loop {
                 if let Ok((mut stream, _)) = listener.accept().await {
                     let mut reader = BufReader::new(&mut stream);
@@ -148,7 +148,7 @@ impl OAuth {
                     reader.read_line(&mut request_line).await.unwrap();
 
                     let url = url::Url::parse(
-                        &("http://localhost".to_string()
+                        &("http://127.0.0.1".to_string()
                             + request_line.split_whitespace().nth(1)?),
                     )
                     .ok()?;
@@ -173,7 +173,7 @@ impl OAuth {
                         .ok()?;
 
                     // The server will terminate itself after collecting the first code.
-                    break (Some(auth));
+                    break Some(auth);
                 }
             }
         }
@@ -187,6 +187,13 @@ impl OAuth {
 }
 
 impl OToken {
+    pub fn new(access: impl ToString, refresh: Option<impl ToString>, expires_at: Option<SystemTime>) -> Self {
+        Self {
+            access: access.to_string(),
+            refresh: refresh.map(|r| r.to_string()),
+            expires_at: expires_at,
+        }
+    }
     pub fn is_expired(&self) -> bool {
         if let Some(t) = self.expires_at.map(|e| e <= SystemTime::now()) {
             return t;
