@@ -29,10 +29,30 @@ pub struct OAuthRequest {
     pub scope: String,
 }
 
+pub type GoogleClient<
+    HasAuthUrl = oauth2::EndpointSet,
+    HasDeviceAuthUrl = oauth2::EndpointNotSet,
+    HasIntrospectionUrl = oauth2::EndpointNotSet,
+    HasRevocationUrl = oauth2::EndpointSet,
+    HasTokenUrl = oauth2::EndpointSet,
+> = oauth2::Client<
+    oauth2::basic::BasicErrorResponse,
+    oauth2::basic::BasicTokenResponse,
+    oauth2::basic::BasicTokenIntrospectionResponse,
+    oauth2::StandardRevocableToken,
+    oauth2::basic::BasicRevocationErrorResponse,
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+>;
+
 #[derive(Debug)]
 pub struct OAuth {
-    client: BasicClient,
+    client: GoogleClient,
     pkce_code_verifier: Mutex<Option<PkceCodeVerifier>>,
+    http_client: reqwest::Client,
 }
 
 impl OAuth {
@@ -43,24 +63,29 @@ impl OAuth {
     ) -> Self {
         // Set up the config for the Google OAuth2 process.
         Self {
-            client: BasicClient::new(
-                ClientId::new(client_id.to_string()),
-                Some(ClientSecret::new(client_secret.to_string())),
-                AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-                    .expect("Invalid authorization endpoint URL"),
-                Some(
+            client: BasicClient::new(ClientId::new(client_id.to_string()))
+                .set_client_secret(ClientSecret::new(client_secret.to_string()))
+                .set_auth_uri(
+                    AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+                        .expect("Invalid authorization endpoint URL"),
+                )
+                .set_token_uri(
                     TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
                         .expect("Invalid token endpoint URL"),
+                )
+                .set_redirect_uri(
+                    RedirectUrl::new(redir_url.to_string()).expect("Invalid redirect URL"),
+                )
+                .set_revocation_url(
+                    RevocationUrl::new("https://oauth2.googleapis.com/revoke".to_string())
+                        .expect("Invalid revocation endpoint URL"),
                 ),
-            )
-            .set_redirect_uri(
-                RedirectUrl::new(redir_url.to_string()).expect("Invalid redirect URL"),
-            )
-            .set_revocation_uri(
-                RevocationUrl::new("https://oauth2.googleapis.com/revoke".to_string())
-                    .expect("Invalid revocation endpoint URL"),
-            ),
             pkce_code_verifier: Mutex::new(None),
+            http_client: reqwest::ClientBuilder::new()
+                // Following redirects opens the client up to SSRF vulnerabilities.
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("Client should build"),
         }
     }
 
@@ -68,7 +93,7 @@ impl OAuth {
         Ok(self
             .client
             .exchange_refresh_token(&RefreshToken::new(ref_token.to_string()))
-            .request_async(reqwest::async_http_client)
+            .request_async(&self.http_client)
             .await?
             .into())
     }
@@ -116,7 +141,7 @@ impl OAuth {
                         .take()
                         .context("PKCE code verifier should exist at this point")?,
                 )
-                .request_async(reqwest::async_http_client)
+                .request_async(&self.http_client)
                 .await?
                 .into(),
         ))
@@ -187,11 +212,15 @@ impl OAuth {
 }
 
 impl OToken {
-    pub fn new(access: impl ToString, refresh: Option<impl ToString>, expires_at: Option<SystemTime>) -> Self {
+    pub fn new(
+        access: impl ToString,
+        refresh: Option<impl ToString>,
+        expires_at: Option<SystemTime>,
+    ) -> Self {
         Self {
             access: access.to_string(),
             refresh: refresh.map(|r| r.to_string()),
-            expires_at: expires_at,
+            expires_at,
         }
     }
     pub fn is_expired(&self) -> bool {
