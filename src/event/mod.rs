@@ -85,6 +85,7 @@ pub struct Event {
     pub transparency: EventTransparency,
     pub updated: String,
     pub visibility: EventVisibility,
+    #[serde(rename = "workingLocationProperties")]
     pub working_location: EventWorkingLocation,
 
     #[serde(skip)]
