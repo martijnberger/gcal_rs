@@ -47,7 +47,6 @@ pub struct EventOfficeLocation {
     pub floor_section_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    pub typ: EventOfficeLocationType,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
@@ -59,13 +58,19 @@ pub struct EventCustomLocation {
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EventHomeOffice {}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EventWorkingLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_location: Option<EventCustomLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub home_office: Option<String>,
+    pub home_office: Option<EventHomeOffice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub office_location: Option<EventOfficeLocation>,
+    #[serde(rename = "type")]
+    pub typ: EventOfficeLocationType,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]

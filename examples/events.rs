@@ -20,7 +20,7 @@ async fn main() {
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
         .expect("[ERR] Missing the GOOGLE_CLIENT_SECRET environment variable.");
 
-    let token = OAuth::new(client_id, client_secret, "http://localhost:5000/auth")
+    let token = OAuth::new(client_id, client_secret, "http://127.0.0.1:8555/auth")
         .naive()
         .await
         .expect("[ERR] Failed to get access key.");
@@ -29,7 +29,7 @@ async fn main() {
     // # Mini example showing how to refresh the access token.
     //
     // println!("Ref: {}", token.refresh.unwrap());
-    // let token = OAuth::new(client_id, client_secret, "http://localhost:5000".to_string())
+    // let token = OAuth::new(client_id, client_secret, "http://localhost:8555".to_string())
     //     .exhange_refresh("REF TOKEN HERE".to_string())
     //     .await
     //     .unwrap();

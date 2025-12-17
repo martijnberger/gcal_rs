@@ -18,7 +18,7 @@ async fn main() {
         .expect("[ERR] Missing the GOOGLE_CLIENT_ID environment variable.");
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
         .expect("[ERR] Missing the GOOGLE_CLIENT_SECRET environment variable.");
-    let token = OAuth::new(client_id, client_secret, "http://localhost:5000/auth")
+    let token = OAuth::new(client_id, client_secret, "http://127.0.0.1:8555/auth")
         .naive()
         .await
         .expect("[ERR] Failed to get access key.");
