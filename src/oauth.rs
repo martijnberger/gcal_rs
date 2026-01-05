@@ -229,7 +229,7 @@ impl OToken {
         }
         false
     }
-    pub fn take_over(&mut self, token: OToken) {
+    pub fn take_over(&mut self, token: Self) {
         self.access = token.access;
         self.refresh = token.refresh;
         self.expires_at = token.expires_at;

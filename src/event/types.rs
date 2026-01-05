@@ -11,7 +11,7 @@ pub enum SendUpdates {
     None,
 }
 impl SendUpdates {
-    pub fn to_str(&self) -> &'static str {
+    pub const fn to_str(&self) -> &'static str {
         match self {
             Self::All => "all",
             Self::ExternalOnly => "externalOnly",

@@ -3,7 +3,7 @@ use thiserror::Error;
 pub type ClientResult<T, E = ClientError> = std::result::Result<T, E>;
 
 /// ClientError provides a mechanism to determine when the access token has expired. All other
-/// errors will be encapsulated by UnknownError.
+/// errors will be encapsulated by `UnknownError`.
 #[derive(Debug, Error)]
 pub enum ClientError {
     #[error("Invalid Access Token")]
