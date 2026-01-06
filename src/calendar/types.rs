@@ -10,7 +10,7 @@ pub enum CalendarAccessRole {
     FreeBusyReader,
 }
 impl CalendarAccessRole {
-    pub fn to_str(&self) -> &'static str {
+    pub const fn to_str(&self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Reader => "reader",

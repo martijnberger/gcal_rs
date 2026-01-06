@@ -129,7 +129,7 @@ fn default_event_kind() -> String {
 fn default_events_kind() -> Option<String> {
     Some("calendar#events".to_string())
 }
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -149,7 +149,7 @@ mod progenitor_support {
         .add(b'}');
 
     #[allow(dead_code)]
-    pub(crate) fn encode_path(pc: &str) -> String {
+    pub fn encode_path(pc: &str) -> String {
         utf8_percent_encode(pc, PATH_SET).to_string()
     }
 }

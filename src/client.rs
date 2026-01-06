@@ -35,11 +35,11 @@ impl GCalClient {
             debug: false,
         }))
     }
-    pub fn calendar_client(self: Arc<Self>) -> CalendarListClient {
-        CalendarListClient::new(self.clone())
+    pub const fn calendar_client(self: Arc<Self>) -> CalendarListClient {
+        CalendarListClient::new(self)
     }
-    pub fn event_client(self: Arc<Self>) -> EventClient {
-        EventClient::new(self.clone())
+    pub const fn event_client(self: Arc<Self>) -> EventClient {
+        EventClient::new(self)
     }
     pub fn clients(self: Arc<Self>) -> (CalendarListClient, EventClient) {
         (
@@ -48,7 +48,7 @@ impl GCalClient {
         )
     }
 
-    pub fn set_debug(&mut self) {
+    pub const fn set_debug(&mut self) {
         self.debug = true
     }
 

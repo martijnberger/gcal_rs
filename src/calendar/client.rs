@@ -9,7 +9,7 @@ pub struct CalendarListClient(Arc<GCalClient>);
 
 impl CalendarListClient {
     /// Construct a CalendarListClient. Requires a Google Calendar Client.
-    pub fn new(client: Arc<GCalClient>) -> Self {
+    pub const fn new(client: Arc<GCalClient>) -> Self {
         Self(client)
     }
 
