@@ -22,5 +22,5 @@ serde_json = "1"
 chrono = "0.4"
 url = "2"
 reqwest = { version = "^0.13", features = ["gzip", "json"] }
-oauth2 = "5.0.0"
+oauth2 = { git = "ssh://git@github.com/martijnberger/oauth2-rs.git" }
 percent-encoding = "2.3.2"
