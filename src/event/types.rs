@@ -160,6 +160,7 @@ pub enum EventType {
     OutOfOffice,
     FocusTime,
     WorkingLocation,
+    Birthday,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
@@ -228,6 +229,7 @@ pub enum EventConferenceEntryPointType {
     #[default]
     Video,
     Phone,
+    #[serde(alias = "sip")]
     SIP,
     More,
 }
