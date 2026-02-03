@@ -40,6 +40,10 @@ pub use event::*;
 mod user;
 pub use user::*;
 
+/// Settings, user preferences like timezone, locale, etc.
+mod settings;
+pub use settings::*;
+
 /// Sendable trait for constructing your own queries to Google Calendar through the client.
 mod sendable;
 pub use sendable::*;
