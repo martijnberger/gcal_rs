@@ -6,9 +6,13 @@ mod client;
 pub use client::EventClient;
 
 pub mod types;
-use types::*;
+use types::{
+    EventAttachment, EventAttendees, EventCalendarDate, EventConferenceData, EventCreator,
+    EventGadget, EventOrganizer, EventReminder, EventSource, EventStatus, EventTransparency,
+    EventType, EventVisibility, EventWorkingLocation, SendUpdates,
+};
 
-use super::*;
+use super::{CalendarAccessRole, DefaultReminder, QueryParams, Sendable};
 
 /* Google API Source: https://developers.google.com/calendar/api/v3/reference/events#resource */
 
@@ -16,11 +20,8 @@ use super::*;
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Events {
-    #[serde(
-        default = "default_events_kind",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub kind: Option<String>,
+    #[serde(default = "default_events_kind")]
+    pub kind: String,
     pub etag: String,
     pub summary: String,
     pub description: String,
@@ -38,6 +39,7 @@ pub struct Events {
 /// Event is a single event.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Event {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<EventAttachment>,
@@ -94,13 +96,19 @@ pub struct Event {
     query_string: QueryParams,
 }
 
+impl Event {
+    pub fn add_query(&mut self, key: String, value: String) {
+        self.query_string.insert(key, value);
+    }
+}
+
 impl Sendable for Event {
     fn path(&self, action: Option<String>) -> String {
         progenitor_support::encode_path(&format!(
             "calendars/{}/events/{}{}",
             self.calendar_id,
             self.id,
-            action.map_or_else(String::new, |x| format!("/{}", x))
+            action.map_or_else(String::new, |x| format!("/{x}"))
         ))
     }
 
@@ -110,30 +118,25 @@ impl Sendable for Event {
 }
 
 impl Events {
-    pub fn add_calendar(&mut self, calendar_id: String) {
-        self.items.iter_mut().for_each(|e| {
-            e.calendar_id = calendar_id.clone();
-        });
-    }
-}
-
-impl Event {
-    pub fn add_query(&mut self, key: String, value: String) {
-        self.query_string.insert(key, value);
+    pub fn add_calendar(&mut self, calendar_id: &str) {
+        let calendar_id = calendar_id.to_string();
+        self.items
+            .iter_mut()
+            .for_each(|e| e.calendar_id.clone_from(&calendar_id));
     }
 }
 
 fn default_event_kind() -> String {
     "calendar#event".to_string()
 }
-fn default_events_kind() -> Option<String> {
-    Some("calendar#events".to_string())
+fn default_events_kind() -> String {
+    "calendar#events".to_string()
 }
 const fn default_true() -> bool {
     true
 }
 
-/// Taken from [google_calendar](https://github.com/oxidecomputer/third-party-api-clients/blob/720c61bf140726145503cdec3a4240c2843a6080/google/calendar/src/lib.rs#L184)
+/// Taken from [google_calendar](<https://github.com/oxidecomputer/third-party-api-clients/blob/720c61bf140726145503cdec3a4240c2843a6080/google/calendar/src/lib.rs#L184>)
 mod progenitor_support {
     use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 

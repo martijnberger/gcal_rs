@@ -10,8 +10,8 @@ use super::{CalendarListClient, ClientError, ClientResult, EventClient, OAuth, O
 
 /// Client is a Google Calendar client. The access key must have already been fetched and the oauth
 /// negotiation should have already been completed. The client itself only implements HTTP verbs
-/// that accept Sendable implementations. You must use the decorated clients such as EventClient
-/// and CalendarListClient to do transactional work.
+/// that accept `Sendable` implementations. You must use the decorated clients such as
+/// `EventClient` and `CalendarListClient` to do transactional work.
 #[derive(Debug, Clone)]
 pub struct GCalClient {
     client: reqwest::Client,
@@ -24,6 +24,9 @@ pub struct GCalClient {
 
 impl GCalClient {
     /// Create a new client. Requires an access key.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying HTTP client cannot be constructed.
     pub fn new(token: OToken, oauth: Option<Arc<OAuth>>) -> ClientResult<Arc<Self>> {
         let client = ClientBuilder::new().gzip(true).https_only(true).build()?;
 
@@ -35,12 +38,15 @@ impl GCalClient {
             debug: false,
         }))
     }
+    #[must_use]
     pub const fn calendar_client(self: Arc<Self>) -> CalendarListClient {
         CalendarListClient::new(self)
     }
+    #[must_use]
     pub const fn event_client(self: Arc<Self>) -> EventClient {
         EventClient::new(self)
     }
+    #[must_use]
     pub fn clients(self: Arc<Self>) -> (CalendarListClient, EventClient) {
         (
             CalendarListClient::new(self.clone()),
@@ -49,10 +55,14 @@ impl GCalClient {
     }
 
     pub const fn set_debug(&mut self) {
-        self.debug = true
+        self.debug = true;
     }
 
     /// Perform a GET request.
+    ///
+    /// # Errors
+    /// Returns an error if building the request URL, applying authorization, or sending the
+    /// request fails.
     pub async fn get(
         &self,
         action: Option<String>,
@@ -63,6 +73,10 @@ impl GCalClient {
     }
 
     /// Perform a POST request.
+    ///
+    /// # Errors
+    /// Returns an error if building the request URL, serializing the body, applying authorization,
+    /// or sending the request fails.
     pub async fn post(
         &self,
         action: Option<String>,
@@ -77,6 +91,10 @@ impl GCalClient {
     }
 
     /// Perform a PUT request.
+    ///
+    /// # Errors
+    /// Returns an error if building the request URL, serializing the body, applying authorization,
+    /// or sending the request fails.
     pub async fn put(
         &self,
         action: Option<String>,
@@ -91,6 +109,10 @@ impl GCalClient {
     }
 
     /// Perform a PATCH request.
+    ///
+    /// # Errors
+    /// Returns an error if building the request URL, serializing the body, applying authorization,
+    /// or sending the request fails.
     pub async fn patch(
         &self,
         action: Option<String>,
@@ -105,6 +127,10 @@ impl GCalClient {
     }
 
     /// Perform a DELETE request.
+    ///
+    /// # Errors
+    /// Returns an error if building the request URL, applying authorization, or sending the
+    /// request fails.
     pub async fn delete(
         &self,
         action: Option<String>,
@@ -119,7 +145,7 @@ impl GCalClient {
             oauth.refresh(&mut *(self.token.write().await)).await?;
         }
         if let Some(headers) = &self.headers {
-            req = req.headers(headers.clone())
+            req = req.headers(headers.clone());
         }
 
         let resp = self.set_bearer(req).await.send().await?;

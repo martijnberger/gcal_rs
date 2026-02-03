@@ -1,4 +1,4 @@
-//! gcal_rs: Another Google Calendar API library for rust-lang
+//! `gcal_rs`: Another Google Calendar API library for rust-lang
 //!
 //! I wrote this by hand because I found other clients hard to use for my use-cases. This provides an API layer into the Google Calendar API that is very minimal but also mostly complete. Types are fully represented.
 //!

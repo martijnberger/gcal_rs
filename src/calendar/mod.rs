@@ -10,7 +10,7 @@ pub use list::*;
 mod types;
 pub use types::*;
 
-use super::*;
+use crate::{QueryParams, Sendable};
 
 /* Google Calendar API: https://developers.google.com/calendar/api/v3/reference/calendars#resource */
 
@@ -18,8 +18,8 @@ use super::*;
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
-    #[serde(default = "default_kind", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    #[serde(default = "default_kind")]
+    pub kind: String,
     pub id: String,
     pub etag: String,
     pub summary: String,
@@ -30,7 +30,7 @@ pub struct Calendar {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_zone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub conference_properties: Option<ConferenceProperties>,
+    pub conference_properties: Option<types::ConferenceProperties>,
 }
 impl Sendable for Calendar {
     fn path(&self, _action: Option<String>) -> String {
@@ -38,9 +38,9 @@ impl Sendable for Calendar {
     }
 
     fn query(&self) -> QueryParams {
-        Default::default()
+        QueryParams::default()
     }
 }
-fn default_kind() -> Option<String> {
-    Some("calendar#calendar".to_string())
+fn default_kind() -> String {
+    "calendar#calendar".to_string()
 }

@@ -56,11 +56,13 @@ pub struct OAuth {
 }
 
 impl OAuth {
-    pub fn new(
-        client_id: impl ToString,
-        client_secret: impl ToString,
-        redir_url: impl ToString,
-    ) -> Self {
+    /// Create a new OAuth client configuration.
+    ///
+    /// # Panics
+    /// Panics if any of the hard-coded OAuth endpoints are invalid URLs or if the HTTP client
+    /// fails to build.
+    #[must_use]
+    pub fn new(client_id: &str, client_secret: &str, redir_url: &str) -> Self {
         // Set up the config for the Google OAuth2 process.
         Self {
             client: BasicClient::new(ClientId::new(client_id.to_string()))
@@ -89,6 +91,10 @@ impl OAuth {
         }
     }
 
+    /// Exchange a refresh token for a new access token.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or the token response cannot be parsed.
     pub async fn exhange_refresh(&self, ref_token: impl ToString) -> Result<OToken> {
         Ok(self
             .client
@@ -126,14 +132,19 @@ impl OAuth {
         authorize_url.to_string()
     }
 
+    /// Exchange an authorization response for an access token.
+    ///
+    /// # Errors
+    /// Returns an error if the PKCE verifier is missing, the token exchange fails, or the response
+    /// cannot be parsed.
     pub async fn auth(&self, request: OAuthRequest) -> Result<(String, OToken)> {
-        let _scope = request.scope;
+        let OAuthRequest { code, state, .. } = request;
 
         // Exchange the code with a token.
         Ok((
-            CsrfToken::new(request.state).secret().clone(),
+            CsrfToken::new(state).secret().clone(),
             self.client
-                .exchange_code(AuthorizationCode::new(request.code))
+                .exchange_code(AuthorizationCode::new(code))
                 .set_pkce_verifier(
                     self.pkce_code_verifier
                         .lock()
@@ -147,6 +158,10 @@ impl OAuth {
         ))
     }
 
+    /// Refresh the access token if it has expired.
+    ///
+    /// # Errors
+    /// Returns an error if the refresh token is missing or if the token exchange fails.
     pub async fn refresh(&self, token: &mut OToken) -> Result<()> {
         if token.is_expired() {
             let t = self
@@ -157,6 +172,10 @@ impl OAuth {
         Ok(())
     }
 
+    /// Perform an interactive OAuth flow using a local TCP listener.
+    ///
+    /// # Errors
+    /// Returns an error if the local listener fails or the OAuth flow does not return a token.
     pub async fn naive(&mut self) -> Result<OToken> {
         async fn listener() -> Option<OAuthRequest> {
             fn query(url: &url::Url, key: &str) -> Option<String> {
@@ -212,17 +231,14 @@ impl OAuth {
 }
 
 impl OToken {
-    pub fn new(
-        access: impl ToString,
-        refresh: Option<impl ToString>,
-        expires_at: Option<SystemTime>,
-    ) -> Self {
+    pub fn new(access: &str, refresh: Option<&str>, expires_at: Option<SystemTime>) -> Self {
         Self {
             access: access.to_string(),
-            refresh: refresh.map(|r| r.to_string()),
+            refresh: refresh.map(str::to_string),
             expires_at,
         }
     }
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(t) = self.expires_at.map(|e| e <= SystemTime::now()) {
             return t;

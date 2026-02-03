@@ -7,16 +7,13 @@ use super::{
 
 /* Google Calendar API: https://developers.google.com/calendar/api/v3/reference/calendarList#resource */
 
-/// CalendarListItem is a single calendar returned by CalendarList, do not confuse this with
+/// `CalendarListItem` is a single calendar returned by `CalendarList`, do not confuse this with
 /// Calendar.
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarListItem {
-    #[serde(
-        default = "default_entry_kind",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub kind: Option<String>,
+    #[serde(default = "default_entry_kind")]
+    pub kind: String,
     pub id: String,
     pub etag: String,
     pub summary: String,
@@ -56,8 +53,8 @@ pub struct CalendarListItem {
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarList {
-    #[serde(default = "default_list_kind", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    #[serde(default = "default_list_kind")]
+    pub kind: String,
     pub etag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_sync_token: Option<String>,
@@ -92,9 +89,9 @@ impl Sendable for CalendarList {
     }
 }
 
-fn default_entry_kind() -> Option<String> {
-    Some("calendar#calendarListEntry".to_string())
+fn default_entry_kind() -> String {
+    "calendar#calendarListEntry".to_string()
 }
-fn default_list_kind() -> Option<String> {
-    Some("calendar#calendarList".to_string())
+fn default_list_kind() -> String {
+    "calendar#calendarList".to_string()
 }

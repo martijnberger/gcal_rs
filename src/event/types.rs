@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use super::{AdditionalProperties, DefaultReminder};
+use super::DefaultReminder;
+use crate::AdditionalProperties;
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
@@ -11,6 +12,7 @@ pub enum SendUpdates {
     None,
 }
 impl SendUpdates {
+    #[must_use]
     pub const fn to_str(&self) -> &'static str {
         match self {
             Self::All => "all",

@@ -1,7 +1,7 @@
-//! This example showcases the Google OAuth2 process for requesting access to the Google Calendar features
+//! This example showcases the Google `OAuth2` process for requesting access to the Google Calendar features
 //! and the user's events.
 //!
-//! Before running it, you'll need to generate your own Google OAuth2 credentials.
+//! Before running it, you'll need to generate your own Google `OAuth2` credentials.
 //!
 //! In order to run the example call:
 //!
@@ -11,7 +11,7 @@
 //!
 //! ...and follow the instructions.
 use chrono::{Duration, Local};
-use gcal_rs::*;
+use gcal_rs::{CalendarAccessRole, GCalClient, OAuth};
 
 #[tokio::main]
 async fn main() {
@@ -20,7 +20,7 @@ async fn main() {
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
         .expect("[ERR] Missing the GOOGLE_CLIENT_SECRET environment variable.");
 
-    let token = OAuth::new(client_id, client_secret, "http://127.0.0.1:8555/auth")
+    let token = OAuth::new(&client_id, &client_secret, "http://127.0.0.1:8555/auth")
         .naive()
         .await
         .expect("[ERR] Failed to get access key.");

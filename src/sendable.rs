@@ -19,6 +19,10 @@ where
 
     fn query(&self) -> BTreeMap<String, String>;
 
+    /// Build the full request URL.
+    ///
+    /// # Errors
+    /// Returns an error if the generated URL is invalid.
     fn url(&self, action: Option<String>) -> ClientResult<Url> {
         Ok(Url::parse_with_params(
             &format!("{}/{}", BASE_URL, self.path(action)),
@@ -26,6 +30,10 @@ where
         )?)
     }
 
+    /// Serialize the request body.
+    ///
+    /// # Errors
+    /// Returns an error if the payload cannot be serialized to JSON.
     fn body_bytes(&self) -> ClientResult<Vec<u8>> {
         Ok(serde_json::to_vec(self)?)
     }

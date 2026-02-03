@@ -1,25 +1,33 @@
 use std::sync::Arc;
 
-use super::{ClientResult, Event, Events, GCalClient, SendUpdates};
+use super::{Event, Events, SendUpdates};
+use crate::{ClientResult, GCalClient};
 
-/// EventClient is the method of managing events from a specific calendar. Requires a Google
+/// `EventClient` is the method of managing events from a specific calendar. Requires a Google
 /// Calendar client.
 #[derive(Debug, Clone)]
 pub struct EventClient(Arc<GCalClient>);
 
 impl EventClient {
-    /// Construct a new EventClient. Requires a Google Calendar Client.
+    /// Construct a new `EventClient`. Requires a Google Calendar Client.
+    #[must_use]
     pub const fn new(client: Arc<GCalClient>) -> Self {
         Self(client)
     }
 
     /// Delete the event.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails.
     pub async fn delete(&self, event: Event) -> ClientResult<()> {
         self.0.delete(None, event).await?;
         Ok(())
     }
 
     /// Get an event by ID.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn get(&self, calendar_id: String, event_id: String) -> ClientResult<Event> {
         let event = Event {
             id: event_id,
@@ -31,6 +39,9 @@ impl EventClient {
 
     /// Import an event. See the Google Calendar documentation for the differences between import
     /// and insert.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn import(&self, event: Event) -> ClientResult<Event> {
         Ok(self
             .0
@@ -42,6 +53,9 @@ impl EventClient {
 
     /// Insert an event. See the Google Calendar documentation for the differences between import
     /// and insert.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn insert(&self, mut event: Event) -> ClientResult<Event> {
         if !event.attachments.is_empty() {
             event.add_query("supportsAttachments".to_string(), "true".to_string());
@@ -55,6 +69,9 @@ impl EventClient {
     }
 
     /// Retrieve all instances for a recurring event.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn instances(&self, event: Event) -> ClientResult<Events> {
         Ok(self
             .0
@@ -65,6 +82,9 @@ impl EventClient {
     }
 
     /// List events between the start and end times.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn list(
         &self,
         calendar_id: String,
@@ -80,19 +100,15 @@ impl EventClient {
         event.add_query("singleEvents".to_string(), "true".to_string());
         event.add_query("orderBy".to_string(), "startTime".to_string());
 
-        let mut events = self
-            .0
-            .get(None, event)
-            .await
-            .expect("Fail here 1")
-            .json::<Events>()
-            .await
-            .expect("Fail 2");
-        events.add_calendar(calendar_id);
+        let mut events = self.0.get(None, event).await?.json::<Events>().await?;
+        events.add_calendar(&calendar_id);
         Ok(events.items)
     }
 
-    /// Move event to another destination calendar_id.
+    /// Move event to another destination `calendar_id`.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails.
     pub async fn move_to_calendar(
         &self,
         mut event: Event,
@@ -110,6 +126,9 @@ impl EventClient {
     }
 
     /// Add an event with the summary.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn add(&self, text: String) -> ClientResult<Event> {
         let mut event = Event::default();
         event.add_query("text".to_string(), text);
@@ -123,6 +142,9 @@ impl EventClient {
     }
 
     /// Update an event.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn update(&self, event: Event) -> ClientResult<Event> {
         Ok(self.0.put(None, event).await?.json().await?)
     }

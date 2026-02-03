@@ -9,13 +9,13 @@ use super::{QueryParams, Sendable};
 
 /// Represents a single Calendar setting from the Settings API.
 ///
-/// See: https://developers.google.com/calendar/api/v3/reference/settings
+/// See: <https://developers.google.com/calendar/api/v3/reference/settings>
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct Setting {
     /// Type of the resource ("calendar#setting")
     pub kind: String,
-    /// ETag of the resource
+    /// `ETag` of the resource
     pub etag: String,
     /// The id of the user setting (e.g., "timezone", "format24HourTime", "locale")
     pub id: String,
@@ -69,7 +69,7 @@ impl Sendable for SettingRequest {
 pub struct SettingsList {
     /// Type of the resource ("calendar#settings")
     pub kind: String,
-    /// ETag of the collection
+    /// `ETag` of the collection
     pub etag: String,
     /// List of user settings
     pub items: Vec<Setting>,
@@ -85,6 +85,7 @@ pub struct SettingsListRequest {
 }
 
 impl SettingsListRequest {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             query_string: QueryParams::new(),
