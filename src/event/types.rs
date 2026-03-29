@@ -63,7 +63,7 @@ pub struct EventCustomLocation {
 pub struct EventHomeOffice {}
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct EventWorkingLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_location: Option<EventCustomLocation>,
@@ -103,7 +103,7 @@ pub enum EventStatus {
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct EventSource {
     pub title: String,
     pub url: String,
@@ -138,7 +138,7 @@ pub enum EventGadgetDisplay {
 }
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct EventGadget {
     pub display: EventGadgetDisplay,
     pub preferences: AdditionalProperties,
@@ -159,6 +159,7 @@ pub struct EventExtendedProperties {
 pub enum EventType {
     #[default]
     Default,
+    FromGmail,
     OutOfOffice,
     FocusTime,
     WorkingLocation,

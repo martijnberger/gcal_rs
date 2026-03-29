@@ -136,6 +136,59 @@ const fn default_true() -> bool {
     true
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{types::EventType, Event};
+
+    #[test]
+    fn deserializes_from_gmail_events() {
+        let event: Event = serde_json::from_str(
+            r#"{
+                "kind": "calendar#event",
+                "etag": "\"etag\"",
+                "id": "gmail-event",
+                "status": "confirmed",
+                "htmlLink": "https://calendar.google.com/event",
+                "created": "2026-04-28T10:00:00Z",
+                "updated": "2026-04-28T10:00:00Z",
+                "summary": "Flight to Copenhagen",
+                "creator": {"email": "user@example.com"},
+                "organizer": {"email": "user@example.com"},
+                "start": {"dateTime": "2026-05-01T10:00:00Z"},
+                "end": {"dateTime": "2026-05-01T11:00:00Z"},
+                "eventType": "fromGmail"
+            }"#,
+        )
+        .expect("fromGmail event payload should deserialize");
+
+        assert_eq!(event.event_type, EventType::FromGmail);
+    }
+
+    #[test]
+    fn deserializes_sparse_working_location_payloads() {
+        let event: Event = serde_json::from_str(
+            r#"{
+                "kind": "calendar#event",
+                "etag": "\"etag\"",
+                "id": "working-location-event",
+                "status": "confirmed",
+                "htmlLink": "https://calendar.google.com/event",
+                "created": "2026-04-28T10:00:00Z",
+                "updated": "2026-04-28T10:00:00Z",
+                "creator": {"email": "user@example.com"},
+                "organizer": {"email": "user@example.com"},
+                "start": {"date": "2026-05-01"},
+                "end": {"date": "2026-05-02"},
+                "eventType": "workingLocation",
+                "workingLocationProperties": {}
+            }"#,
+        )
+        .expect("working location payload should deserialize when type is omitted");
+
+        assert_eq!(event.event_type, EventType::WorkingLocation);
+    }
+}
+
 /// Taken from [google_calendar](<https://github.com/oxidecomputer/third-party-api-clients/blob/720c61bf140726145503cdec3a4240c2843a6080/google/calendar/src/lib.rs#L184>)
 mod progenitor_support {
     use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
