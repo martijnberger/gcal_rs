@@ -329,3 +329,180 @@ pub struct EventAttachment {
     pub mime_type: String,
     pub title: String,
 }
+
+/// Attachment input. Google populates attachment metadata in responses.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventAttachmentWrite {
+    pub file_url: String,
+}
+
+/// Attendee input without response-only identity and organizer flags.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventAttendeeWrite {
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_guests: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_status: Option<EventResponseStatus>,
+}
+
+/// Organizer input for imports. Other writes cannot change the organizer.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventOrganizerWrite {
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Source input with an explicitly supplied URL.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSourceWrite {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Reminder input requires an explicit choice of calendar defaults.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventReminderWrite {
+    pub use_default: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<Vec<DefaultReminder>>,
+}
+
+/// Working-location input always includes its discriminator and matching value.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum EventWorkingLocationWrite {
+    HomeOffice {
+        #[serde(rename = "homeOffice")]
+        home_office: EventHomeOffice,
+    },
+    OfficeLocation {
+        #[serde(rename = "officeLocation")]
+        office_location: EventOfficeLocation,
+    },
+    CustomLocation {
+        #[serde(rename = "customLocation")]
+        custom_location: EventCustomLocation,
+    },
+}
+
+/// Conference creation input; server-generated conference status is not writable.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventCreateConferenceRequestWrite {
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conference_solution_key: Option<EventConferenceSolutionKeyWrite>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct EventConferenceSolutionKeyWrite {
+    #[serde(rename = "type")]
+    pub typ: EventConferenceSolutionKeyType,
+}
+
+/// Writable conference creation properties, without response metadata.
+#[derive(Serialize, Default, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventConferenceDataWrite {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_request: Option<EventCreateConferenceRequestWrite>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[cfg(test)]
+mod write_tests {
+    use super::*;
+
+    #[test]
+    fn nested_inputs_do_not_inject_response_fields_or_defaults() {
+        let attendee = EventAttendeeWrite {
+            email: "guest@example.com".to_string(),
+            additional_guests: None,
+            comment: None,
+            display_name: None,
+            optional: Some(false),
+            resource: None,
+            response_status: None,
+        };
+        assert_eq!(
+            serde_json::to_value(attendee).unwrap(),
+            serde_json::json!({
+                "email": "guest@example.com", "optional": false
+            })
+        );
+        let organizer = EventOrganizerWrite {
+            email: "owner@example.com".to_string(),
+            display_name: None,
+        };
+        assert_eq!(
+            serde_json::to_value(organizer).unwrap(),
+            serde_json::json!({
+                "email": "owner@example.com"
+            })
+        );
+        let source = EventSourceWrite {
+            url: "https://example.com/event".to_string(),
+            title: None,
+        };
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            serde_json::json!({
+                "url": "https://example.com/event"
+            })
+        );
+        let reminders = EventReminderWrite {
+            use_default: false,
+            overrides: Some(Vec::new()),
+        };
+        assert_eq!(
+            serde_json::to_value(reminders).unwrap(),
+            serde_json::json!({
+                "useDefault": false, "overrides": []
+            })
+        );
+        let location = EventWorkingLocationWrite::HomeOffice {
+            home_office: EventHomeOffice {},
+        };
+        assert_eq!(
+            serde_json::to_value(location).unwrap(),
+            serde_json::json!({
+                "type": "homeOffice", "homeOffice": {}
+            })
+        );
+        let conference = EventConferenceDataWrite {
+            create_request: Some(EventCreateConferenceRequestWrite {
+                request_id: "request-id".to_string(),
+                conference_solution_key: Some(EventConferenceSolutionKeyWrite {
+                    typ: EventConferenceSolutionKeyType::HangoutsMeet,
+                }),
+            }),
+            notes: None,
+        };
+        assert_eq!(
+            serde_json::to_value(conference).unwrap(),
+            serde_json::json!({
+                "createRequest": {
+                    "requestId": "request-id",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"}
+                }
+            })
+        );
+    }
+}
