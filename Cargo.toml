@@ -12,15 +12,18 @@ keywords = ["google_calendar", "calendar", "oauth2", "events"]
 categories = ["asynchronous", "date-and-time"]
 
 [dependencies]
-anyhow = "1"
+anyhow = "1.0.104"
 thiserror = "2"
 
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.54.1", features = ["io-util", "net", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 chrono = "0.4"
 url = "2"
-reqwest = { version = "^0.13", features = ["gzip", "json"] }
-oauth2 = { git = "ssh://git@github.com/martijnberger/oauth2-rs.git" }
+reqwest = { version = "0.13.5", features = ["gzip", "json"] }
+oauth2 = { git = "https://github.com/martijnberger/oauth2-rs.git", rev = "795424735e017fe14407d59c6988b31e73f8b03e", features = ["timing-resistant-secret-traits"] }
 percent-encoding = "2.3.2"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }

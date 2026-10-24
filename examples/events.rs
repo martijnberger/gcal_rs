@@ -24,11 +24,9 @@ async fn main() {
         .naive()
         .await
         .expect("[ERR] Failed to get access key.");
-    println!("Refresh: {:?}", token.refresh);
 
     // # Mini example showing how to refresh the access token.
     //
-    // println!("Ref: {}", token.refresh.unwrap());
     // let token = OAuth::new(client_id, client_secret, "http://localhost:8555".to_string())
     //     .exhange_refresh("REF TOKEN HERE".to_string())
     //     .await

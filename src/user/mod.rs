@@ -30,14 +30,11 @@ impl Sendable for UserInfo {
         self.query_string.clone()
     }
 
-    fn url(&self, action: Option<String>) -> ClientResult<Url> {
-        Ok(Url::parse_with_params(
-            &format!(
-                "{}/{}",
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                self.path(action)
-            ),
-            self.query(),
-        )?)
+    fn url(&self, _action: Option<String>) -> ClientResult<Url> {
+        let mut url = Url::parse("https://www.googleapis.com/oauth2/v2/userinfo")?;
+        if !self.query_string.is_empty() {
+            url.query_pairs_mut().extend_pairs(self.query());
+        }
+        Ok(url)
     }
 }

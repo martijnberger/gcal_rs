@@ -4,20 +4,21 @@
 //!
 //! ## Example
 //!
-//! ```ignore
-//! use gcal_rs::*;
+//! ```no_run
+//! use gcal_rs::{GCalClient, OToken};
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), anyhow::Error> {
-//!     let access_key = std::env::args().nth(1).expect("Provide an access key");
+//! async fn main() -> anyhow::Result<()> {
+//!     let token = OToken::new("access-token", None, None);
+//!     let client = GCalClient::new(token, None)?.event_client();
 //!     let now = chrono::Local::now();
-//!     let client = Client::new(access_key);
-//!     let client = EventClient::new(client);
-//!     let list = client.list(now - chrono::Duration::days(1), now).await?;
-//!
-//!     for event in &list {
-//!         eprintln!("{} {}", event.id, event.summary);
+//!     let list = client
+//!         .list("primary".into(), now - chrono::Duration::days(1), now)
+//!         .await?;
+//!     for event in list {
+//!         println!("{} {}", event.id, event.summary);
 //!     }
+//!     Ok(())
 //! }
 //! ```
 
@@ -49,4 +50,9 @@ mod sendable;
 pub use sendable::*;
 
 mod error;
-pub use error::{ClientError, ClientResult};
+pub use error::*;
+
+mod request;
+
+#[cfg(test)]
+mod test_support;

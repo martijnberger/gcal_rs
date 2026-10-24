@@ -1,43 +1,44 @@
 use std::sync::Arc;
 
-use reqwest::{
-    header::{HeaderMap, HeaderValue},
-    ClientBuilder, RequestBuilder, Response,
-};
+use reqwest::{ClientBuilder, Method, RequestBuilder, Response};
 use tokio::sync::RwLock;
 
-use super::{CalendarListClient, ClientError, ClientResult, EventClient, OAuth, OToken, Sendable};
+use super::{
+    ApiError, CalendarListClient, ClientError, ClientResult, EventClient, OAuth, OToken, Sendable,
+};
 
-/// Client is a Google Calendar client. The access key must have already been fetched and the oauth
-/// negotiation should have already been completed. The client itself only implements HTTP verbs
-/// that accept `Sendable` implementations. You must use the decorated clients such as
-/// `EventClient` and `CalendarListClient` to do transactional work.
+/// Authenticated Google Calendar transport. Requests never follow redirects.
 #[derive(Debug, Clone)]
 pub struct GCalClient {
     client: reqwest::Client,
-    headers: Option<HeaderMap<HeaderValue>>,
     token: Arc<RwLock<OToken>>,
     oauth: Option<Arc<OAuth>>,
-
     debug: bool,
+    #[cfg(test)]
+    base_url: Option<url::Url>,
 }
 
 impl GCalClient {
-    /// Create a new client. Requires an access key.
+    /// Create an HTTPS-only client with an existing token.
     ///
     /// # Errors
-    /// Returns an error if the underlying HTTP client cannot be constructed.
+    /// Returns an error if the HTTP client cannot be constructed.
     pub fn new(token: OToken, oauth: Option<Arc<OAuth>>) -> ClientResult<Arc<Self>> {
-        let client = ClientBuilder::new().gzip(true).https_only(true).build()?;
-
+        let client = ClientBuilder::new()
+            .gzip(true)
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
         Ok(Arc::new(Self {
             client,
-            headers: None,
             token: Arc::new(token.into()),
             oauth,
             debug: false,
+            #[cfg(test)]
+            base_url: None,
         }))
     }
+
     #[must_use]
     pub const fn calendar_client(self: Arc<Self>) -> CalendarListClient {
         CalendarListClient::new(self)
@@ -45,6 +46,11 @@ impl GCalClient {
     #[must_use]
     pub const fn event_client(self: Arc<Self>) -> EventClient {
         EventClient::new(self)
+    }
+
+    #[must_use]
+    pub const fn settings_client(self: Arc<Self>) -> crate::SettingsClient {
+        crate::SettingsClient::new(self)
     }
     #[must_use]
     pub fn clients(self: Arc<Self>) -> (CalendarListClient, EventClient) {
@@ -54,138 +60,173 @@ impl GCalClient {
         )
     }
 
+    /// Log method and path only, excluding tokens, query values, and event bodies.
     pub const fn set_debug(&mut self) {
         self.debug = true;
     }
 
-    /// Perform a GET request.
-    ///
+    /// Send a GET request.
     /// # Errors
-    /// Returns an error if building the request URL, applying authorization, or sending the
-    /// request fails.
+    /// Returns transport, API, or URL errors.
     pub async fn get(
         &self,
         action: Option<String>,
         target: impl Sendable,
     ) -> ClientResult<Response> {
-        self.send(self.client.get(self.get_url("GET", &target, action)?))
-            .await
+        self.request(Method::GET, action, target).await
     }
-
-    /// Perform a POST request.
-    ///
+    /// Send a JSON POST or bodyless action.
     /// # Errors
-    /// Returns an error if building the request URL, serializing the body, applying authorization,
-    /// or sending the request fails.
+    /// Returns transport, API, URL, or serialization errors.
     pub async fn post(
         &self,
         action: Option<String>,
         target: impl Sendable,
     ) -> ClientResult<Response> {
-        self.send(
-            self.client
-                .post(self.get_url("POST", &target, action)?)
-                .body(target.body_bytes()?),
-        )
-        .await
+        self.request(Method::POST, action, target).await
     }
-
-    /// Perform a PUT request.
-    ///
+    /// Send a JSON PUT request.
     /// # Errors
-    /// Returns an error if building the request URL, serializing the body, applying authorization,
-    /// or sending the request fails.
+    /// Returns transport, API, URL, or serialization errors.
     pub async fn put(
         &self,
         action: Option<String>,
         target: impl Sendable,
     ) -> ClientResult<Response> {
-        self.send(
-            self.client
-                .put(self.get_url("PUT", &target, action)?)
-                .body(target.body_bytes()?),
-        )
-        .await
+        self.request(Method::PUT, action, target).await
     }
-
-    /// Perform a PATCH request.
-    ///
+    /// Send a JSON PATCH request.
     /// # Errors
-    /// Returns an error if building the request URL, serializing the body, applying authorization,
-    /// or sending the request fails.
+    /// Returns transport, API, URL, or serialization errors.
     pub async fn patch(
         &self,
         action: Option<String>,
         target: impl Sendable,
     ) -> ClientResult<Response> {
-        self.send(
-            self.client
-                .patch(self.get_url("PATCH", &target, action)?)
-                .body(target.body_bytes()?),
-        )
-        .await
+        self.request(Method::PATCH, action, target).await
     }
-
-    /// Perform a DELETE request.
-    ///
+    /// Send a DELETE request, accepting successful empty responses.
     /// # Errors
-    /// Returns an error if building the request URL, applying authorization, or sending the
-    /// request fails.
+    /// Returns transport, API, or URL errors.
     pub async fn delete(
         &self,
         action: Option<String>,
         target: impl Sendable,
     ) -> ClientResult<Response> {
-        self.send(self.client.delete(self.get_url("DELETE", &target, action)?))
-            .await
+        self.request(Method::DELETE, action, target).await
     }
 
-    async fn send(&self, mut req: RequestBuilder) -> ClientResult<Response> {
+    async fn request(
+        &self,
+        method: Method,
+        action: Option<String>,
+        target: impl Sendable,
+    ) -> ClientResult<Response> {
+        let url = self.get_url(&target, action)?;
+        if self.debug {
+            eprintln!("[{}] {}", method, url.path());
+        }
+        let carries_body =
+            matches!(method, Method::POST | Method::PUT | Method::PATCH) && target.has_body();
+        let mut request = self.client.request(method, url).headers(target.headers()?);
+        if carries_body {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(target.body_bytes()?);
+        }
+        self.send(request).await
+    }
+
+    pub(crate) async fn send(&self, req: RequestBuilder) -> ClientResult<Response> {
         if let Some(oauth) = &self.oauth {
             oauth.refresh(&mut *(self.token.write().await)).await?;
         }
-        if let Some(headers) = &self.headers {
-            req = req.headers(headers.clone());
-        }
-
-        let resp = self.set_bearer(req).await.send().await?;
-        if resp.status() != 200 {
-            if let Some(header) = resp.headers().get("WWW-Authenticate") {
-                if header
-                    .to_str()?
-                    .starts_with(r#"Bearer error="invalid_token""#)
-                {
-                    return Err(ClientError::InvalidToken);
-                }
-            }
-        }
-        Ok(resp)
+        let response = req
+            .bearer_auth(&self.token.read().await.access)
+            .send()
+            .await?;
+        Self::check_response(response).await
     }
 
-    fn get_url(
-        &self,
-        method: &str,
-        target: &impl Sendable,
-        action: Option<String>,
-    ) -> ClientResult<url::Url> {
-        let url = target.url(action)?;
-
-        if self.debug {
-            eprintln!(
-                "[{}] {} | {}",
-                method,
-                url,
-                String::from_utf8(target.body_bytes()?).unwrap_or_default()
-            );
+    pub(crate) async fn check_response(response: Response) -> ClientResult<Response> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
         }
+        Err(ClientError::Api(Box::new(ApiError::from_response(
+            status,
+            &response.bytes().await?,
+        ))))
+    }
 
+    fn get_url(&self, target: &impl Sendable, action: Option<String>) -> ClientResult<url::Url> {
+        let url = target.url(action)?;
+        #[cfg(test)]
+        if let Some(base) = &self.base_url {
+            let mut local = base.join(url.path().trim_start_matches("/calendar/v3/"))?;
+            local.set_query(url.query());
+            return Ok(local);
+        }
         Ok(url)
     }
 
-    async fn set_bearer(&self, req: RequestBuilder) -> RequestBuilder {
-        req.header(
-            "Authorization",
-            format!("Bearer {}", self.token.read().await.access),
-        )
+    #[cfg(test)]
+    pub(crate) fn for_test(base_url: url::Url) -> Arc<Self> {
+        Arc::new(Self {
+            client: ClientBuilder::new()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            token: Arc::new(OToken::new("test-token", None, None).into()),
+            oauth: None,
+            debug: false,
+            base_url: Some(base_url),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{request::ApiRequest, test_support::fixture, ClientError};
+
+    #[tokio::test]
+    async fn google_errors_preserve_status_reason_and_details() {
+        let (client, server) = fixture(vec![(403, r#"{"error":{"message":"Denied","errors":[{"reason":"forbidden","domain":"calendar"}],"details":[{"permission":"write"}]}}"#)]).await;
+        let error = client
+            .event_client()
+            .delete(crate::Event::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), Some(reqwest::StatusCode::FORBIDDEN));
+        match error {
+            ClientError::Api(api) => {
+                assert_eq!(api.errors[0].reason, "forbidden");
+                assert_eq!(api.details[0]["permission"], "write");
+            }
+            other => panic!("expected API error: {other:?}"),
+        }
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_success_and_non_json_failures_are_handled() {
+        let (client, server) = fixture(vec![(204, ""), (503, "upstream unavailable")]).await;
+        client
+            .delete(
+                None,
+                ApiRequest::new("calendars/primary/events/event".into()),
+            )
+            .await
+            .unwrap();
+        let error = client
+            .get(None, ApiRequest::new("calendars/primary".into()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.status(),
+            Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)
+        );
+        server.await.unwrap();
     }
 }

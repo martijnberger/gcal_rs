@@ -35,18 +35,19 @@ I'm not saying this is perfect but it attempts to be better and have some solidi
 ## Example
 
 ```rust
-use gcal::*;
+use chrono::{Duration, Local};
+use gcal_rs::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client_id = std::env::var("GOOGLE_CLIENT_ID")?;
     let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")?;
 
-    let token = OAuth::new(client_id, client_secret, "http://localhost:8555/auth")
+    let token = OAuth::new(&client_id, &client_secret, "http://127.0.0.1:8555/auth")
         .naive()
         .await?;
 
-    let (calendar_client, event_client) = GCalClient::new(token.access)?.clients();
+    let (calendar_client, event_client) = GCalClient::new(token, None)?.clients();
 
     let list = calendar_client
         .list(true, CalendarAccessRole::Reader)
@@ -70,6 +71,71 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 ```
+
+## Typed writes and paginated reads
+
+Use `EventWrite`, not the response `Event`, for creation and full updates.
+`None` omits a property; `Some(false)` and empty collections remain explicit.
+`insert(calendar_id, payload)`, `import(calendar_id, payload)`, and
+`update(calendar_id, event_id, payload)` select the target separately from the body.
+`add(calendar_id, text)` performs a bodyless quick-add.
+
+```rust
+use gcal_rs::{EventListOptions, EventWrite};
+
+let payload = EventWrite {
+    summary: Some("Planning".into()),
+    guests_can_invite_others: Some(false),
+    ..Default::default()
+};
+let filters = EventListOptions {
+    event_types: vec!["default".into(), "focusTime".into()],
+    ..Default::default()
+};
+```
+
+`EventClient::list_page` exposes one page; `list_all` collects every page and
+retains the final synchronization token. The time-window `list` convenience method
+also collects all pages. Recurring instances have equivalent `instances_page` and
+`instances_all` methods. Calendar-list and settings clients provide `list_page`
+and `list_all` with `CalendarListOptions` and `SettingsListOptions`.
+
+Use `QueryParams::append` for repeated raw filters in an options struct's `extra`
+field. `insert` replaces a single-valued key. Response enums retain future values
+as `Unknown(String)`; sparse nested fields are optional. Calendar access roles are
+optional on deleted entries, and recurrence lines retain their original order.
+
+## Security and dependency maintenance
+
+- API and OAuth requests require HTTPS and do not follow redirects. Callers receive
+  redirect responses rather than having credentials or request bodies forwarded.
+- `OAuth::auth` validates CSRF state before exchanging a code. Each `OAuth` instance
+  supports one pending authorization flow; calling `auth_url` again invalidates the
+  previous URL. Matching callbacks consume their state and PKCE verifier once.
+- `OAuth::naive` is a minimal desktop helper listening on `127.0.0.1:8555`. Use
+  `http://127.0.0.1:8555/auth` as its redirect URI. Applications hosting their own
+  callback handler should pass the parsed response to `OAuth::auth`.
+- Token debug output is redacted, but token fields and serialized JSON still contain
+  credentials. Do not log serialized tokens; protect persisted tokens with restrictive
+  storage permissions.
+
+The OAuth dependency uses a revision-pinned fork over HTTPS for reqwest 0.13 support.
+Published oauth2 5.0 uses reqwest 0.12; switching to it would introduce a second
+HTTP/TLS dependency stack. Review the fork when upgrading OAuth.
+
+To review updates and advisories:
+
+```sh
+cargo outdated --root-deps-only
+cargo update
+cargo audit --deny warnings
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+`cargo-outdated` and `cargo-audit` are separate Cargo tools. Commit `Cargo.lock`
+updates alongside manifest changes. Downstream library consumers resolve their own
+lockfiles and should run their own advisory checks.
 
 ## Status
 
