@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use super::{collection_path, item_path, Event, EventWrite, Events, SendUpdates};
+use super::{
+    collection_path, item_path, Event, EventInstancesOptions, EventListOptions, EventWrite, Events,
+    SendUpdates,
+};
 use crate::request::ApiRequest;
 use crate::{ClientResult, GCalClient};
 
@@ -73,49 +76,114 @@ impl EventClient {
         Ok(event)
     }
 
-    /// Retrieve all instances for a recurring event.
-    ///
+    /// Retrieve one recurring-instance page.
     /// # Errors
-    /// Returns an error if the request fails or the response cannot be parsed.
-    pub async fn instances(&self, event: Event) -> ClientResult<Events> {
-        let calendar_id = event.calendar_id.clone();
-        let mut events = self
-            .0
-            .get(Some("instances".to_string()), event)
-            .await?
-            .json::<Events>()
-            .await?;
-        events.add_calendar(&calendar_id);
-        Ok(events)
+    /// Returns API, transport, or decoding errors.
+    pub async fn instances_page(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        options: &EventInstancesOptions,
+    ) -> ClientResult<Events> {
+        let mut request =
+            ApiRequest::new(format!("{}/instances", item_path(calendar_id, event_id)));
+        request.query = options.query();
+        let mut page = self.0.get(None, request).await?.json::<Events>().await?;
+        page.add_calendar(calendar_id);
+        Ok(page)
     }
 
-    /// List events between the start and end times.
-    ///
+    /// Retrieve every recurring instance, including empty intermediate pages.
     /// # Errors
-    /// Returns an error if the request fails or the response cannot be parsed.
+    /// Returns API, transport, or decoding errors.
+    pub async fn instances_all(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        mut options: EventInstancesOptions,
+    ) -> ClientResult<Events> {
+        let mut result = self.instances_page(calendar_id, event_id, &options).await?;
+        while let Some(token) = result.next_page_token.take() {
+            options.page_token = Some(token);
+            let page = self.instances_page(calendar_id, event_id, &options).await?;
+            result.items.extend(page.items);
+            result.next_page_token = page.next_page_token;
+            result.next_sync_token = page.next_sync_token;
+        }
+        Ok(result)
+    }
+
+    /// Retrieve all instances for the supplied recurring event.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn instances(&self, event: Event) -> ClientResult<Events> {
+        self.instances_all(
+            &event.calendar_id,
+            &event.id,
+            EventInstancesOptions {
+                extra: event.query_string,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Retrieve one page with its continuation and synchronization tokens.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn list_page(
+        &self,
+        calendar_id: &str,
+        options: &EventListOptions,
+    ) -> ClientResult<Events> {
+        let mut request = ApiRequest::new(collection_path(calendar_id));
+        request.query = options.query();
+        let mut page = self.0.get(None, request).await?.json::<Events>().await?;
+        page.add_calendar(calendar_id);
+        Ok(page)
+    }
+
+    /// Retrieve all pages without losing the final synchronization token.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn list_all(
+        &self,
+        calendar_id: &str,
+        mut options: EventListOptions,
+    ) -> ClientResult<Events> {
+        let mut result = self.list_page(calendar_id, &options).await?;
+        while let Some(token) = result.next_page_token.take() {
+            options.page_token = Some(token);
+            let page = self.list_page(calendar_id, &options).await?;
+            result.items.extend(page.items);
+            result.next_page_token = page.next_page_token;
+            result.next_sync_token = page.next_sync_token;
+        }
+        Ok(result)
+    }
+
+    /// List every event in a time window, expanding recurring events.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
     pub async fn list(
         &self,
         calendar_id: String,
         start_time: chrono::DateTime<chrono::Local>,
         end_time: chrono::DateTime<chrono::Local>,
     ) -> ClientResult<Vec<Event>> {
-        let mut request = ApiRequest::new(collection_path(&calendar_id));
-        request
-            .query
-            .insert("timeMin".to_string(), start_time.to_rfc3339());
-        request
-            .query
-            .insert("timeMax".to_string(), end_time.to_rfc3339());
-        request
-            .query
-            .insert("singleEvents".to_string(), "true".to_string());
-        request
-            .query
-            .insert("orderBy".to_string(), "startTime".to_string());
-
-        let mut events = self.0.get(None, request).await?.json::<Events>().await?;
-        events.add_calendar(&calendar_id);
-        Ok(events.items)
+        Ok(self
+            .list_all(
+                &calendar_id,
+                EventListOptions {
+                    time_min: Some(start_time.to_rfc3339()),
+                    time_max: Some(end_time.to_rfc3339()),
+                    single_events: Some(true),
+                    order_by: Some("startTime".into()),
+                    ..Default::default()
+                },
+            )
+            .await?
+            .items)
     }
 
     /// Move an event to another calendar and return it with the destination calendar context.
@@ -194,6 +262,7 @@ mod tests {
             summary: Some("Meeting".to_string()),
             attachments: Some(vec![EventAttachmentWrite {
                 file_url: "https://drive.google.com/file/d/attachment".to_string(),
+                ..Default::default()
             }]),
             ..Default::default()
         };
@@ -351,5 +420,57 @@ mod tests {
         assert!(requests[2]
             .target
             .starts_with("/calendar/v3/calendars/team%2Fa%40example.com/events?"));
+    }
+
+    #[tokio::test]
+    async fn pagination_crosses_empty_pages_and_retains_repeated_filters_and_final_token() {
+        let (transport, observed) = fixture(vec![
+            (200, r#"{"items":[{"id":"first"}],"nextPageToken":"page2"}"#),
+            (200, r#"{"items":[],"nextPageToken":"page3"}"#),
+            (200, r#"{"items":[{"id":"last"}],"nextSyncToken":"final"}"#),
+        ])
+        .await;
+        let result = transport
+            .event_client()
+            .list_all(
+                "primary",
+                crate::EventListOptions {
+                    event_types: vec!["default".into(), "focusTime".into()],
+                    private_extended_property: vec!["a=1".into(), "b=2".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "last"]
+        );
+        assert!(result.items.iter().all(|e| e.calendar_id == "primary"));
+        assert_eq!(result.next_sync_token.as_deref(), Some("final"));
+        assert!(result.next_page_token.is_none());
+        let requests = observed.await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            let pairs: Vec<_> = url.query_pairs().collect();
+            let values: Vec<_> = pairs
+                .iter()
+                .filter(|(key, _)| key == "eventTypes")
+                .map(|(_, value)| value.as_ref())
+                .collect();
+            assert_eq!(values, ["default", "focusTime"]);
+            let expected = [None, Some("page2"), Some("page3")][index];
+            assert_eq!(
+                pairs
+                    .iter()
+                    .find(|(key, _)| key == "pageToken")
+                    .map(|(_, v)| v.as_ref()),
+                expected
+            );
+        }
     }
 }

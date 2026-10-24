@@ -72,6 +72,39 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+## Typed writes and paginated reads
+
+Use `EventWrite`, not the response `Event`, for creation and full updates.
+`None` omits a property; `Some(false)` and empty collections remain explicit.
+`insert(calendar_id, payload)`, `import(calendar_id, payload)`, and
+`update(calendar_id, event_id, payload)` select the target separately from the body.
+`add(calendar_id, text)` performs a bodyless quick-add.
+
+```rust
+use gcal_rs::{EventListOptions, EventWrite};
+
+let payload = EventWrite {
+    summary: Some("Planning".into()),
+    guests_can_invite_others: Some(false),
+    ..Default::default()
+};
+let filters = EventListOptions {
+    event_types: vec!["default".into(), "focusTime".into()],
+    ..Default::default()
+};
+```
+
+`EventClient::list_page` exposes one page; `list_all` collects every page and
+retains the final synchronization token. The time-window `list` convenience method
+also collects all pages. Recurring instances have equivalent `instances_page` and
+`instances_all` methods. Calendar-list and settings clients provide `list_page`
+and `list_all` with `CalendarListOptions` and `SettingsListOptions`.
+
+Use `QueryParams::append` for repeated raw filters in an options struct's `extra`
+field. `insert` replaces a single-valued key. Response enums retain future values
+as `Unknown(String)`; sparse nested fields are optional. Calendar access roles are
+optional on deleted entries, and recurrence lines retain their original order.
+
 ## Security and dependency maintenance
 
 - API and OAuth requests require HTTPS and do not follow redirects. Callers receive

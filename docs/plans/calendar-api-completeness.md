@@ -66,4 +66,10 @@ Structured HTTP/API errors preserve statuses and Google reasons/details; success
 
 Verification: 16 tests passed; the public rustdoc example compiled; strict Clippy and advisory checks passed. An executable smoke made a read-only Google request using an intentionally invalid token and observed a structured HTTP 401, and verified safe write omission/false semantics. No authenticated calendar changes were made.
 
-Phases 2–4 remain to be implemented in the subsequent stack changes.
+### Phase 2 completed
+
+Completed discovery event/nested/calendar/settings fields, lossless unknown enum variants, sparse response handling, public conference metadata, repeated query pairs, and page/all-page APIs. Convenience event/calendar lists and recurring instances now traverse empty intermediate pages and preserve final sync tokens and event calendar context.
+
+Verification: 34 tests passed, public rustdoc compiled, strict Clippy passed. An executable smoke round-tripped sparse/future official-shaped payloads, encoded repeated filters, and observed a structured real Google 401 from the new page API. No authenticated mutations were made.
+
+Phases 3–4 remain to be implemented in the subsequent stack changes.

@@ -1,17 +1,18 @@
-use std::collections::BTreeSet;
-
 use serde::{Deserialize, Serialize};
 
 mod client;
 pub use client::EventClient;
+mod options;
+pub use options::*;
 
 pub mod types;
 use types::{
-    EventAttachment, EventAttachmentWrite, EventAttendeeWrite, EventAttendees, EventCalendarDate,
-    EventConferenceData, EventConferenceDataWrite, EventCreator, EventExtendedProperties,
-    EventGadget, EventOrganizer, EventOrganizerWrite, EventReminder, EventReminderWrite,
-    EventSource, EventSourceWrite, EventStatus, EventTransparency, EventType, EventVisibility,
-    EventWorkingLocation, EventWorkingLocationWrite, SendUpdates,
+    EventAttachment, EventAttachmentWrite, EventAttendeeWrite, EventAttendees,
+    EventBirthdayProperties, EventBirthdayPropertiesWrite, EventCalendarDate, EventConferenceData,
+    EventConferenceDataWrite, EventCreator, EventExtendedProperties, EventFocusTimeProperties,
+    EventGadget, EventOrganizer, EventOrganizerWrite, EventOutOfOfficeProperties, EventReminder,
+    EventReminderWrite, EventSource, EventSourceWrite, EventStatus, EventTransparency, EventType,
+    EventVisibility, EventWorkingLocation, EventWorkingLocationWrite, SendUpdates,
 };
 
 use super::{CalendarAccessRole, DefaultReminder, QueryParams, Sendable};
@@ -34,6 +35,8 @@ pub struct Events {
     pub default_reminders: Vec<DefaultReminder>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_sync_token: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Event>,
 }
@@ -45,6 +48,10 @@ pub struct Events {
 #[derive(Serialize, Default, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EventWrite {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anyone_can_add_self: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birthday_properties: Option<EventBirthdayPropertiesWrite>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<EventAttachmentWrite>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,9 +69,13 @@ pub struct EventWrite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_time_unspecified: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_label_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_type: Option<EventType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extended_properties: Option<EventExtendedProperties>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_time_properties: Option<EventFocusTimeProperties>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guests_can_invite_others: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,11 +91,15 @@ pub struct EventWrite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organizer: Option<EventOrganizerWrite>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_of_office_properties: Option<EventOutOfOfficeProperties>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_copy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub recurrence: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reminders: Option<EventReminderWrite>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sequence: Option<u64>,
+    pub sequence: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<EventSourceWrite>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +124,9 @@ pub struct EventWrite {
 #[serde(default, rename_all = "camelCase")]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Event {
+    pub anyone_can_add_self: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub birthday_properties: Option<EventBirthdayProperties>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<EventAttachment>,
     pub attendees_omitted: bool,
@@ -123,8 +141,14 @@ pub struct Event {
     pub description: Option<String>,
     pub end: EventCalendarDate,
     pub end_time_unspecified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_label_id: Option<String>,
     pub etag: String,
     pub event_type: EventType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extended_properties: Option<EventExtendedProperties>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_time_properties: Option<EventFocusTimeProperties>,
     pub gadget: EventGadget,
     #[serde(default = "default_true", rename = "guestsCanInviteOthers")]
     pub guests_can_invite_others: bool,
@@ -143,12 +167,14 @@ pub struct Event {
     pub locked: bool,
     pub organizer: EventOrganizer,
     pub original_start_time: EventCalendarDate,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_of_office_properties: Option<EventOutOfOfficeProperties>,
     pub private_copy: bool,
     pub recurring_event_id: String,
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub recurrence: BTreeSet<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recurrence: Vec<String>,
     pub reminders: EventReminder,
-    pub sequence: u64,
+    pub sequence: i32,
     pub source: EventSource,
     pub start: EventCalendarDate,
     pub status: EventStatus,
@@ -332,5 +358,114 @@ mod tests {
         .expect("working location payload should deserialize when type is omitted");
 
         assert_eq!(event.event_type, EventType::WorkingLocation);
+    }
+
+    #[test]
+    fn incremental_sync_accepts_cancelled_and_future_event_types() {
+        let page: super::Events = serde_json::from_value(serde_json::json!({
+            "nextSyncToken": "sync-token",
+            "items": [
+                {"id": "deleted", "status": "cancelled"},
+                {
+                    "id": "exception", "status": "cancelled",
+                    "recurringEventId": "series",
+                    "originalStartTime": {"date": "2026-10-24"}
+                },
+                {
+                    "id": "future", "eventType": "futureEventType", "status": "futureStatus",
+                    "visibility": "futureVisibility", "transparency": "futureTransparency",
+                    "workingLocationProperties": {"type": "futureLocation"}
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(page.next_sync_token.as_deref(), Some("sync-token"));
+        assert_eq!(page.items[0].status, super::types::EventStatus::Cancelled);
+        assert_eq!(
+            page.items[1].original_start_time.date.as_deref(),
+            Some("2026-10-24")
+        );
+        assert_eq!(
+            page.items[2].event_type,
+            EventType::Unknown("futureEventType".to_string())
+        );
+        assert_eq!(
+            page.items[2].working_location.typ,
+            Some(super::types::EventOfficeLocationType::Unknown(
+                "futureLocation".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn complete_special_event_metadata_is_preserved() {
+        let payload = serde_json::json!({
+            "id": "special-event",
+            "eventType": "birthday",
+            "anyoneCanAddSelf": true,
+            "eventLabelId": "label-id",
+            "extendedProperties": {
+                "private": {"private-key": "private-value"},
+                "shared": {"shared-key": "shared-value"}
+            },
+            "focusTimeProperties": {
+                "autoDeclineMode": "declineOnlyNewConflictingInvitations",
+                "chatStatus": "doNotDisturb", "declineMessage": "Focusing"
+            },
+            "outOfOfficeProperties": {
+                "autoDeclineMode": "declineAllConflictingInvitations", "declineMessage": "Away"
+            },
+            "birthdayProperties": {
+                "type": "custom", "contact": "people/c12345", "customTypeName": "Special day"
+            },
+            "gadget": {
+                "type": "birthday", "display": "icon", "height": 2147483647, "width": 1024,
+                "iconLink": "https://example.com/icon", "link": "https://example.com",
+                "title": "Birthday", "preferences": {"key": "value"}
+            },
+            "sequence": 2147483647,
+            "recurrence": ["RDATE:20261024", "RRULE:FREQ=YEARLY", "RDATE:20261024"]
+        });
+        let event: Event = serde_json::from_value(payload.clone()).unwrap();
+        let serialized = serde_json::to_value(event).unwrap();
+        for (key, value) in payload.as_object().unwrap() {
+            assert_eq!(&serialized[key], value, "field {key}");
+        }
+    }
+
+    #[test]
+    fn special_event_writes_only_send_explicit_writable_fields() {
+        use super::types::{
+            EventAutoDeclineMode, EventBirthdayPropertiesWrite, EventBirthdayType, EventChatStatus,
+            EventFocusTimeProperties, EventOutOfOfficeProperties,
+        };
+        let event = EventWrite {
+            anyone_can_add_self: Some(false),
+            birthday_properties: Some(EventBirthdayPropertiesWrite {
+                typ: Some(EventBirthdayType::Birthday),
+            }),
+            event_label_id: Some(String::new()),
+            focus_time_properties: Some(EventFocusTimeProperties {
+                auto_decline_mode: Some(EventAutoDeclineMode::DeclineNone),
+                chat_status: Some(EventChatStatus::Available),
+                decline_message: None,
+            }),
+            out_of_office_properties: Some(EventOutOfOfficeProperties::default()),
+            private_copy: Some(false),
+            sequence: Some(i32::MAX),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "anyoneCanAddSelf": false,
+                "birthdayProperties": {"type": "birthday"},
+                "eventLabelId": "",
+                "focusTimeProperties": {"autoDeclineMode": "declineNone", "chatStatus": "available"},
+                "outOfOfficeProperties": {},
+                "privateCopy": false,
+                "sequence": 2147483647
+            })
+        );
     }
 }

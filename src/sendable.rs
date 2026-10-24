@@ -5,7 +5,76 @@ use super::ClientResult;
 
 const BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 
-pub type QueryParams = BTreeMap<String, String>;
+/// Ordered query pairs. Use `append` for Google's repeatable filters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueryParams(Vec<(String, String)>);
+
+impl QueryParams {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn insert(&mut self, key: String, value: String) -> Option<String> {
+        let previous = self.remove(&key);
+        self.0.push((key, value));
+        previous
+    }
+
+    pub fn append(&mut self, key: String, value: String) {
+        self.0.push((key, value));
+    }
+
+    pub fn remove(&mut self, key: &str) -> Option<String> {
+        let mut previous = None;
+        self.0.retain_mut(|(existing, value)| {
+            if existing == key {
+                previous = Some(std::mem::take(value));
+                false
+            } else {
+                true
+            }
+        });
+        previous
+    }
+
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0
+            .iter()
+            .find(|(existing, _)| existing == key)
+            .map(|(_, value)| value)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, (String, String)> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for QueryParams {
+    type Item = (String, String);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl Extend<(String, String)> for QueryParams {
+    fn extend<T: IntoIterator<Item = (String, String)>>(&mut self, pairs: T) {
+        self.0.extend(pairs);
+    }
+}
+
+impl FromIterator<(String, String)> for QueryParams {
+    fn from_iter<T: IntoIterator<Item = (String, String)>>(pairs: T) -> Self {
+        Self(pairs.into_iter().collect())
+    }
+}
 pub type AdditionalProperties = BTreeMap<String, String>;
 
 /// Sendable is the trait you must implement to interact with the Client. This object is received
@@ -17,7 +86,7 @@ where
 {
     fn path(&self, action: Option<String>) -> String;
 
-    fn query(&self) -> BTreeMap<String, String>;
+    fn query(&self) -> QueryParams;
 
     /// Whether a mutation carries a JSON body. Bodyless POST actions override this.
     fn has_body(&self) -> bool {

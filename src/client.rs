@@ -47,6 +47,11 @@ impl GCalClient {
     pub const fn event_client(self: Arc<Self>) -> EventClient {
         EventClient::new(self)
     }
+
+    #[must_use]
+    pub const fn settings_client(self: Arc<Self>) -> crate::SettingsClient {
+        crate::SettingsClient::new(self)
+    }
     #[must_use]
     pub fn clients(self: Arc<Self>) -> (CalendarListClient, EventClient) {
         (
