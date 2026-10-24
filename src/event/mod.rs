@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 mod client;
 pub use client::EventClient;
-mod options;
+pub(crate) mod options;
 pub use options::*;
 mod patch;
 pub use patch::*;

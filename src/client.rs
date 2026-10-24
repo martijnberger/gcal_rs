@@ -52,6 +52,32 @@ impl GCalClient {
     pub const fn settings_client(self: Arc<Self>) -> crate::SettingsClient {
         crate::SettingsClient::new(self)
     }
+
+    /// Calendar resource management (distinct from the user's calendar list).
+    #[must_use]
+    pub const fn calendars_client(self: Arc<Self>) -> crate::CalendarClient {
+        crate::CalendarClient::new(self)
+    }
+    #[must_use]
+    pub const fn acl_client(self: Arc<Self>) -> crate::AclClient {
+        crate::AclClient::new(self)
+    }
+    #[must_use]
+    pub const fn freebusy_client(self: Arc<Self>) -> crate::FreeBusyClient {
+        crate::FreeBusyClient::new(self)
+    }
+    #[must_use]
+    pub const fn colors_client(self: Arc<Self>) -> crate::ColorsClient {
+        crate::ColorsClient::new(self)
+    }
+    #[must_use]
+    pub const fn channels_client(self: Arc<Self>) -> crate::ChannelsClient {
+        crate::ChannelsClient::new(self)
+    }
+    #[must_use]
+    pub const fn batch_client(self: Arc<Self>) -> crate::BatchClient {
+        crate::BatchClient::new(self)
+    }
     #[must_use]
     pub fn clients(self: Arc<Self>) -> (CalendarListClient, EventClient) {
         (
@@ -146,6 +172,27 @@ impl GCalClient {
             .send()
             .await?;
         Self::check_response(response).await
+    }
+
+    pub(crate) async fn send_multipart(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> ClientResult<Response> {
+        let url = url::Url::parse("https://www.googleapis.com/")?.join(path)?;
+        #[cfg(test)]
+        let url = if let Some(base) = &self.base_url {
+            base.join(path)?
+        } else {
+            url
+        };
+        let request = self
+            .client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body);
+        self.send(request).await
     }
 
     pub(crate) async fn check_response(response: Response) -> ClientResult<Response> {

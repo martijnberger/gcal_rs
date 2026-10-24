@@ -1,7 +1,13 @@
 use std::sync::Arc;
 
-use super::{CalendarAccessRole, CalendarList, CalendarListItem};
-use crate::{ClientError, ClientResult, GCalClient, QueryParams};
+use super::{
+    CalendarAccessRole, CalendarList, CalendarListEntryPatch, CalendarListEntryWrite,
+    CalendarListItem,
+};
+use crate::{
+    request::{segment, ApiRequest},
+    ClientError, ClientResult, GCalClient, QueryParams,
+};
 
 /// `CalendarListClient` is the method of accessing the calendar list. You must provide it with a
 /// Google Calendar client.
@@ -15,6 +21,99 @@ impl CalendarListClient {
         Self(client)
     }
 
+    /// Fetch one entry in the authenticated user's calendar list.
+    ///
+    /// # Errors
+    /// Returns API, transport, URL, or response decoding errors.
+    pub async fn get(
+        &self,
+        calendar_id: &str,
+        options: CalendarListEntryOptions,
+    ) -> ClientResult<CalendarListItem> {
+        let mut request = ApiRequest::new(calendar_list_entry_path(calendar_id));
+        request.query = options.extra;
+        Ok(self.0.get(None, request).await?.json().await?)
+    }
+
+    /// Add an existing calendar to the user's list. The required calendar ID is
+    /// sent in the collection request body, not appended to its endpoint.
+    ///
+    /// # Errors
+    /// Returns API, transport, serialization, URL, or response decoding errors.
+    pub async fn insert(
+        &self,
+        calendar_id: &str,
+        entry: CalendarListEntryWrite,
+        options: CalendarListEntryOptions,
+    ) -> ClientResult<CalendarListItem> {
+        #[derive(serde::Serialize)]
+        struct InsertEntry<'a> {
+            id: &'a str,
+            #[serde(flatten)]
+            entry: CalendarListEntryWrite,
+        }
+        let mut request = ApiRequest::with_body(
+            "users/me/calendarList".into(),
+            InsertEntry {
+                id: calendar_id,
+                entry,
+            },
+        );
+        request.query = options.query();
+        Ok(self.0.post(None, request).await?.json().await?)
+    }
+
+    /// Replace writable calendar-list preferences. Enable `color_rgb_format`
+    /// when setting foreground/background colors.
+    ///
+    /// # Errors
+    /// Returns API errors (including HTTP 412), transport, serialization, URL,
+    /// invalid header, or response decoding errors.
+    pub async fn update(
+        &self,
+        calendar_id: &str,
+        entry: CalendarListEntryWrite,
+        options: CalendarListEntryOptions,
+    ) -> ClientResult<CalendarListItem> {
+        let mut request = ApiRequest::with_body(calendar_list_entry_path(calendar_id), entry);
+        request.query = options.query();
+        request.if_match = options.if_match;
+        Ok(self.0.put(None, request).await?.json().await?)
+    }
+
+    /// Change only specified per-user preferences. Empty reminder/notification
+    /// arrays explicitly remove all entries.
+    ///
+    /// # Errors
+    /// Returns API errors (including HTTP 412), transport, serialization, URL,
+    /// invalid header, or response decoding errors.
+    pub async fn patch(
+        &self,
+        calendar_id: &str,
+        entry: CalendarListEntryPatch,
+        options: CalendarListEntryOptions,
+    ) -> ClientResult<CalendarListItem> {
+        let mut request = ApiRequest::with_body(calendar_list_entry_path(calendar_id), entry);
+        request.query = options.query();
+        request.if_match = options.if_match;
+        Ok(self.0.patch(None, request).await?.json().await?)
+    }
+
+    /// Remove a calendar from the user's list, without deleting the calendar.
+    ///
+    /// # Errors
+    /// Returns API errors (including HTTP 412), transport, URL, or invalid header errors.
+    pub async fn delete(
+        &self,
+        calendar_id: &str,
+        options: CalendarListEntryOptions,
+    ) -> ClientResult<()> {
+        let mut request = ApiRequest::new(calendar_list_entry_path(calendar_id));
+        request.query = options.extra;
+        request.if_match = options.if_match;
+        self.0.delete(None, request).await?;
+        Ok(())
+    }
     /// List every page of calendars, including empty intermediate pages.
     ///
     /// # Errors
@@ -85,6 +184,31 @@ impl CalendarListClient {
     ) -> ClientResult<CalendarList> {
         options.sync_token = Some(sync_token.into());
         self.list_all(options).await
+    }
+}
+
+fn calendar_list_entry_path(calendar_id: &str) -> String {
+    format!("users/me/calendarList/{}", segment(calendar_id))
+}
+
+/// Options for calendar-list entry operations. Typed color options override
+/// matching raw query pairs on insert, update, and patch. `if_match` applies to
+/// update, patch, and delete; global/future query parameters use `extra`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CalendarListEntryOptions {
+    pub color_rgb_format: Option<bool>,
+    pub if_match: Option<String>,
+    pub extra: QueryParams,
+}
+
+impl CalendarListEntryOptions {
+    #[must_use]
+    pub fn query(&self) -> QueryParams {
+        let mut query = self.extra.clone();
+        if let Some(value) = self.color_rgb_format {
+            query.insert("colorRgbFormat".into(), value.to_string());
+        }
+        query
     }
 }
 
@@ -159,6 +283,206 @@ impl CalendarListOptions {
 mod tests {
     use super::*;
     use crate::test_support::fixture;
+    use crate::{calendar::NotificationSettingsWrite, Patch};
+
+    #[tokio::test]
+    async fn entry_lifecycle_uses_collection_insert_and_safe_color_preferences() {
+        let (client, observed) = fixture(vec![
+            (
+                200,
+                r#"{"id":"team/a+b@example.com","summary":"Team","accessRole":"reader"}"#,
+            ),
+            (
+                200,
+                r##"{"id":"team/a+b@example.com","backgroundColor":"#0088aa"}"##,
+            ),
+            (200, r#"{"id":"team/a+b@example.com","selected":false}"#),
+            (
+                200,
+                r#"{"id":"team/a+b@example.com","defaultReminders":[]}"#,
+            ),
+            (204, ""),
+        ])
+        .await;
+        let calendars = CalendarListClient::new(client);
+        let id = "team/a+b@example.com";
+        let fetched = calendars
+            .get(id, CalendarListEntryOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(fetched.summary, "Team");
+        assert_eq!(fetched.access_role, Some(CalendarAccessRole::Reader));
+        let mut options = CalendarListEntryOptions {
+            color_rgb_format: Some(true),
+            ..CalendarListEntryOptions::default()
+        };
+        options
+            .extra
+            .append("colorRgbFormat".into(), "false".into());
+        options
+            .extra
+            .append("colorRgbFormat".into(), "false".into());
+        options.extra.append("future".into(), "one".into());
+        options.extra.append("future".into(), "two".into());
+        let original = options.clone();
+        let inserted = calendars
+            .insert(
+                id,
+                CalendarListEntryWrite {
+                    background_color: Some("#0088aa".into()),
+                    foreground_color: Some("#ffffff".into()),
+                    hidden: Some(false),
+                    default_reminders: Some(vec![]),
+                    notification_settings: Some(NotificationSettingsWrite::default()),
+                    ..CalendarListEntryWrite::default()
+                },
+                options.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(options, original);
+        assert_eq!(inserted.background_color.as_deref(), Some("#0088aa"));
+        calendars
+            .update(
+                id,
+                CalendarListEntryWrite {
+                    selected: Some(false),
+                    ..CalendarListEntryWrite::default()
+                },
+                CalendarListEntryOptions {
+                    color_rgb_format: Some(false),
+                    if_match: Some("\"entry-one\"".into()),
+                    ..CalendarListEntryOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        calendars
+            .patch(
+                id,
+                CalendarListEntryPatch {
+                    summary_override: Patch::Null,
+                    selected: Patch::Value(false),
+                    default_reminders: Patch::Value(vec![]),
+                    notification_settings: Patch::Value(NotificationSettingsWrite::default()),
+                    ..CalendarListEntryPatch::default()
+                },
+                CalendarListEntryOptions {
+                    color_rgb_format: Some(true),
+                    if_match: Some("\"entry-two\"".into()),
+                    ..CalendarListEntryOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        calendars
+            .delete(
+                id,
+                CalendarListEntryOptions {
+                    if_match: Some("\"entry-three\"".into()),
+                    ..CalendarListEntryOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        let requests = observed.await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(
+                request.method,
+                ["GET", "POST", "PUT", "PATCH", "DELETE"][index]
+            );
+            let url = url::Url::parse(&format!("http://localhost{}", request.target)).unwrap();
+            assert_eq!(
+                url.path(),
+                if index == 1 {
+                    "/calendar/v3/users/me/calendarList"
+                } else {
+                    "/calendar/v3/users/me/calendarList/team%2Fa%2Bb%40example.com"
+                }
+            );
+            let pairs: Vec<_> = url.query_pairs().collect();
+            assert_eq!(
+                pairs
+                    .iter()
+                    .filter(|pair| pair.0 == "colorRgbFormat")
+                    .map(|pair| pair.1.as_ref())
+                    .collect::<Vec<_>>(),
+                match index {
+                    1 | 3 => vec!["true"],
+                    2 => vec!["false"],
+                    _ => vec![],
+                }
+            );
+            if index == 1 {
+                assert_eq!(
+                    pairs
+                        .iter()
+                        .filter(|pair| pair.0 == "future")
+                        .map(|pair| pair.1.as_ref())
+                        .collect::<Vec<_>>(),
+                    ["one", "two"]
+                );
+            }
+        }
+        assert!(requests[0].body.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[1].body).unwrap(),
+            serde_json::json!({
+                "id":id, "backgroundColor":"#0088aa", "foregroundColor":"#ffffff",
+                "hidden":false, "defaultReminders":[], "notificationSettings":{"notifications":[]}
+            })
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[2].body).unwrap(),
+            serde_json::json!({"selected":false})
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[3].body).unwrap(),
+            serde_json::json!({
+                "summaryOverride":null, "selected":false, "defaultReminders":[],
+                "notificationSettings":{"notifications":[]}
+            })
+        );
+        for (index, etag) in [
+            (2, "\"entry-one\""),
+            (3, "\"entry-two\""),
+            (4, "\"entry-three\""),
+        ] {
+            assert_eq!(requests[index].headers["if-match"], etag);
+        }
+        for request in &requests[1..4] {
+            assert_eq!(request.headers["content-type"], "application/json");
+        }
+        assert!(requests[4].body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_list_entry_etag_returns_structured_conflict_without_retry() {
+        let (client, observed) = fixture(vec![(
+            412,
+            r#"{"error":{"code":412,"message":"Precondition failed"}}"#,
+        )])
+        .await;
+        let error = CalendarListClient::new(client)
+            .update(
+                "primary",
+                CalendarListEntryWrite {
+                    hidden: Some(false),
+                    ..CalendarListEntryWrite::default()
+                },
+                CalendarListEntryOptions {
+                    if_match: Some("\"stale\"".into()),
+                    ..CalendarListEntryOptions::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.status(),
+            Some(reqwest::StatusCode::PRECONDITION_FAILED)
+        );
+        assert_eq!(observed.await.unwrap().len(), 1);
+    }
 
     #[tokio::test]
     async fn sync_keeps_sparse_deletions_all_pages_and_final_token() {

@@ -78,4 +78,37 @@ Implemented event/calendar/settings sync wrappers, full delta pagination and fin
 
 Verification: 46 tests passed, public rustdoc compiled, strict Clippy passed after deleting an unused intermediate query helper. The executable smoke verified patch clear/false/omission, local rejection of incompatible sync filters, and structured HTTP 401 from a real Google sync read. No authenticated mutations were made.
 
-Phase 4 remains to be implemented in the subsequent stack change.
+### Phase 4 completed
+
+Implemented typed clients for the remaining calendar metadata/list, ACL, colors,
+free/busy, watch, and channel-stop operations. All 38 discovery methods are callable.
+Resource writes use dedicated DTOs, patches preserve omission/null/value semantics,
+and free/busy responses retain per-calendar/group failures. ACL pagination and sync
+preserve sparse tombstones, final tokens, and explicit 410 errors.
+
+Batch requests use the authenticated `/batch/calendar/v3` endpoint, safe typed event
+operations, conditional headers, repeated query pairs, unique IDs, and a 1000-item
+limit. Multipart parsing validates framing and response correlation while retaining
+per-item success, empty responses, and structured failures. Request paths/headers
+reject injection and encoding avoids temporary formatting buffers.
+
+Verification: 67 permanent tests passed; all three rustdoc examples passed with
+none ignored; strict Clippy and formatting checks passed. A temporary executable
+protocol harness exercised every one of the 38 discovery methods and compared
+observed HTTP verbs, paths, body presence/content type, supported query keys, and
+required query parameters against the official discovery snapshot. It was removed
+after verification rather than retaining wiring-only tests.
+
+A live read-only smoke received structured Google HTTP 401 responses for calendar,
+ACL, availability, and color reads using a deliberately invalid token; Google's
+actual multipart endpoint returned a correlated per-item HTTP 401 for an event read.
+Channel serialization/token redaction was exercised without registering a webhook.
+Advisory scanning passed for the 205 locked dependencies. Independent read-only
+resource and multipart/security reviews reported no concrete findings.
+
+README usage covers the full resource surface, ownership/destructive-operation
+boundaries, webhook verification/renewal, partial errors, and non-atomic batch
+semantics. `examples/resources.rs` provides optional authenticated read-only probes.
+No authenticated writes, webhook delivery, ownership transfer, or token refresh
+against a live Google account were tested; those require real credentials and a
+designated test calendar.
