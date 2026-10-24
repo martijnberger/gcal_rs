@@ -52,6 +52,9 @@ pub use sendable::*;
 mod error;
 pub use error::*;
 
+mod patch;
+pub use patch::Patch;
+
 mod request;
 
 #[cfg(test)]

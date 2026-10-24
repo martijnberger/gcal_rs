@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{CalendarAccessRole, CalendarList, CalendarListItem};
-use crate::{ClientResult, GCalClient, QueryParams};
+use crate::{ClientError, ClientResult, GCalClient, QueryParams};
 
 /// `CalendarListClient` is the method of accessing the calendar list. You must provide it with a
 /// Google Calendar client.
@@ -37,10 +37,13 @@ impl CalendarListClient {
     /// Fetch a single page without consuming or modifying reusable options.
     ///
     /// # Errors
-    /// Returns an error if the request fails or the response cannot be parsed.
+    /// Returns an error if sync filters are invalid, the request fails, or the response
+    /// cannot be parsed. HTTP 410 is returned unchanged for application-managed full sync.
     pub async fn list_page(&self, options: &CalendarListOptions) -> ClientResult<CalendarList> {
+        let query = options.query();
+        CalendarListOptions::validate(&query)?;
         let mut request = CalendarList::default();
-        request.set_query(options.query());
+        request.set_query(query);
         Ok(self
             .0
             .get(None, request)
@@ -64,12 +67,32 @@ impl CalendarListClient {
         }
         Ok(result)
     }
+
+    /// Collect every page of changes since `sync_token`, retaining deleted entries
+    /// and the final synchronization token.
+    ///
+    /// The supplied token overrides any token in `options`, including raw query pairs.
+    /// This method never modifies application storage or retries an expired token.
+    /// If the error's [`ClientError::requires_full_sync`] is true (HTTP 410), discard
+    /// the application's stored sync token and perform a new full synchronization.
+    ///
+    /// # Errors
+    /// Returns an error for invalid sync filters, a failed request, or an invalid response.
+    pub async fn sync(
+        &self,
+        sync_token: impl Into<String>,
+        mut options: CalendarListOptions,
+    ) -> ClientResult<CalendarList> {
+        options.sync_token = Some(sync_token.into());
+        self.list_all(options).await
+    }
 }
 
 /// Parameters for `calendarList.list`. Typed fields override matching raw keys.
 ///
-/// Google restricts which filters can be combined with a synchronization token.
-/// These options expose the wire parameters; they do not manage synchronization.
+/// With a synchronization token, `min_access_role` and `show_own_organization_only`
+/// are forbidden, and `show_deleted` and `show_hidden` cannot be false. Validation
+/// includes raw query pairs after typed overrides. Options never manage stored sync state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CalendarListOptions {
     pub max_results: Option<u32>,
@@ -111,12 +134,205 @@ impl CalendarListOptions {
         }
         query
     }
+
+    pub(crate) fn validate(query: &QueryParams) -> ClientResult<()> {
+        if query.get("syncToken").is_none() {
+            return Ok(());
+        }
+        for (key, value) in query.iter() {
+            if matches!(key.as_str(), "minAccessRole" | "showOwnOrganizationOnly") {
+                return Err(ClientError::InvalidRequest(format!(
+                    "{key} cannot be combined with syncToken"
+                )));
+            }
+            if matches!(key.as_str(), "showDeleted" | "showHidden") && value == "false" {
+                return Err(ClientError::InvalidRequest(format!(
+                    "{key} cannot be false when syncToken is set"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::fixture;
+
+    #[tokio::test]
+    async fn sync_keeps_sparse_deletions_all_pages_and_final_token() {
+        let (client, observed) = fixture(vec![
+            (
+                200,
+                r#"{"items":[{"id":"changed"}],"nextPageToken":"middle +/"}"#,
+            ),
+            (200, r#"{"nextPageToken":"last"}"#),
+            (
+                200,
+                r#"{"items":[{"id":"removed","deleted":true}],"nextSyncToken":"new-sync"}"#,
+            ),
+        ])
+        .await;
+        let mut options = CalendarListOptions {
+            max_results: Some(2),
+            show_deleted: Some(true),
+            show_hidden: Some(true),
+            sync_token: Some("overridden-typed".into()),
+            ..CalendarListOptions::default()
+        };
+        options
+            .extra
+            .append("syncToken".into(), "overridden-raw".into());
+        options.extra.append("future".into(), "one".into());
+        options.extra.append("future".into(), "two".into());
+        let original = options.clone();
+        let list = CalendarListClient::new(client)
+            .sync("delta +/", options.clone())
+            .await
+            .unwrap();
+        assert_eq!(options, original);
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].id, "changed");
+        assert_eq!(list.items[0].access_role, None);
+        assert_eq!(list.items[1].id, "removed");
+        assert_eq!(list.items[1].deleted, Some(true));
+        assert_eq!(list.next_page_token, None);
+        assert_eq!(list.next_sync_token.as_deref(), Some("new-sync"));
+        for (index, request) in observed.await.unwrap().iter().enumerate() {
+            assert_eq!(request.method, "GET");
+            let url = url::Url::parse(&format!("http://localhost{}", request.target)).unwrap();
+            assert_eq!(url.path(), "/calendar/v3/users/me/calendarList");
+            let query: Vec<_> = url.query_pairs().collect();
+            for (key, value) in [
+                ("syncToken", "delta +/"),
+                ("maxResults", "2"),
+                ("showDeleted", "true"),
+                ("showHidden", "true"),
+            ] {
+                assert_eq!(
+                    query
+                        .iter()
+                        .filter(|pair| pair.0 == key)
+                        .map(|pair| pair.1.as_ref())
+                        .collect::<Vec<_>>(),
+                    [value]
+                );
+            }
+            assert_eq!(
+                query
+                    .iter()
+                    .filter(|pair| pair.0 == "future")
+                    .map(|pair| pair.1.as_ref())
+                    .collect::<Vec<_>>(),
+                ["one", "two"]
+            );
+            assert_eq!(
+                query
+                    .iter()
+                    .find(|pair| pair.0 == "pageToken")
+                    .map(|pair| pair.1.as_ref()),
+                [None, Some("middle +/"), Some("last")][index]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_expiration_requires_full_sync_without_retry_or_option_mutation() {
+        let (client, observed) = fixture(vec![(
+            410,
+            r#"{"error":{"code":410,"message":"Sync token expired"}}"#,
+        )])
+        .await;
+        let options = CalendarListOptions::default();
+        let original = options.clone();
+        let error = CalendarListClient::new(client)
+            .sync("expired", options.clone())
+            .await
+            .unwrap_err();
+        assert!(error.requires_full_sync());
+        assert_eq!(error.status(), Some(reqwest::StatusCode::GONE));
+        assert_eq!(options, original);
+        let requests = observed.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].target.contains("syncToken=expired"));
+    }
+
+    #[tokio::test]
+    async fn invalid_sync_options_are_rejected_before_any_request_and_remain_reusable() {
+        let (client, observed) = fixture(vec![(200, r#"{"nextSyncToken":"done"}"#)]).await;
+        let client = CalendarListClient::new(client);
+        let mut invalid = vec![
+            CalendarListOptions {
+                sync_token: Some("sync".into()),
+                min_access_role: Some(CalendarAccessRole::Reader),
+                ..CalendarListOptions::default()
+            },
+            CalendarListOptions {
+                sync_token: Some("sync".into()),
+                show_own_organization_only: Some(false),
+                ..CalendarListOptions::default()
+            },
+            CalendarListOptions {
+                sync_token: Some("sync".into()),
+                show_deleted: Some(false),
+                ..CalendarListOptions::default()
+            },
+            CalendarListOptions {
+                sync_token: Some("sync".into()),
+                show_hidden: Some(false),
+                ..CalendarListOptions::default()
+            },
+        ];
+        for (key, value) in [
+            ("minAccessRole", "reader"),
+            ("showOwnOrganizationOnly", "false"),
+            ("showDeleted", "false"),
+            ("showHidden", "false"),
+        ] {
+            for raw_token in [false, true] {
+                let mut options = CalendarListOptions::default();
+                if raw_token {
+                    options.extra.append("syncToken".into(), "sync".into());
+                } else {
+                    options.sync_token = Some("sync".into());
+                }
+                options.extra.append(key.into(), value.into());
+                if matches!(key, "showDeleted" | "showHidden") {
+                    options.extra.append(key.into(), "true".into());
+                }
+                invalid.push(options);
+            }
+        }
+        for options in invalid {
+            let original = options.clone();
+            let error = client.list_page(&options).await.unwrap_err();
+            assert!(matches!(error, ClientError::InvalidRequest(_)));
+            assert_eq!(options, original);
+        }
+        let mut valid = CalendarListOptions {
+            sync_token: Some("typed-sync".into()),
+            show_deleted: Some(true),
+            show_hidden: Some(true),
+            ..CalendarListOptions::default()
+        };
+        valid.extra.append("syncToken".into(), "raw-sync".into());
+        valid.extra.append("showDeleted".into(), "false".into());
+        valid.extra.append("showHidden".into(), "false".into());
+        assert_eq!(
+            client
+                .list_page(&valid)
+                .await
+                .unwrap()
+                .next_sync_token
+                .as_deref(),
+            Some("done")
+        );
+        let requests = observed.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].target.contains("syncToken=typed-sync"));
+        assert!(!requests[0].target.contains("false"));
+    }
 
     #[tokio::test]
     async fn all_pages_preserve_filters_repeated_extras_and_final_sync_token() {

@@ -6,8 +6,11 @@
 //! `SettingsClient::get` reads an individual preference. `list_page` returns
 //! one page with its continuation/synchronization tokens; `list_all` follows
 //! every continuation, including empty intermediate pages, and retains the final
-//! synchronization token. `SettingsListOptions` exposes typed paging parameters
-//! and raw, repeatable `extra` query pairs without managing synchronization state.
+//! synchronization token. `sync` collects all changes since a supplied token without
+//! modifying application storage. HTTP 410 is returned unchanged; when
+//! `ClientError::requires_full_sync()` is true, perform a new full synchronization.
+//! `SettingsListOptions` exposes typed paging parameters and raw, repeatable `extra`
+//! query pairs without managing synchronization state.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -229,6 +232,25 @@ impl SettingsClient {
         }
         Ok(result)
     }
+
+    /// Collect every page of changes since `sync_token`, preserving sparse settings
+    /// and the final synchronization token.
+    ///
+    /// The supplied token overrides any token in `options`, including raw query pairs.
+    /// This method never modifies application storage or retries an expired token.
+    /// If the error's [`crate::ClientError::requires_full_sync`] is true (HTTP 410),
+    /// discard the application's stored sync token and perform a new full synchronization.
+    ///
+    /// # Errors
+    /// Returns an error if any request fails or a response cannot be parsed.
+    pub async fn sync(
+        &self,
+        sync_token: impl Into<String>,
+        mut options: SettingsListOptions,
+    ) -> ClientResult<SettingsList> {
+        options.sync_token = Some(sync_token.into());
+        self.list_all(options).await
+    }
 }
 
 #[cfg(test)]
@@ -237,20 +259,29 @@ mod tests {
     use crate::test_support::fixture;
 
     #[tokio::test]
-    async fn all_settings_pages_keep_query_parameters_and_final_token() {
+    async fn sync_settings_pages_keep_query_parameters_sparse_items_and_final_token() {
         let (client, observed) = fixture(vec![
             (200, r#"{"items":[{"id":"timezone","value":"Europe/Amsterdam"}],"nextPageToken":"middle +/"}"#),
             (200, r#"{"nextPageToken":"last"}"#),
-            (200, r#"{"items":[{"id":"locale","value":"nl"}],"nextSyncToken":"final-sync"}"#),
+            (200, r#"{"items":[{"id":"locale"}],"nextSyncToken":"final-sync"}"#),
         ]).await;
         let mut options = SettingsListOptions {
             max_results: Some(2),
-            sync_token: Some("previous-sync".into()),
+            sync_token: Some("overridden-typed".into()),
             ..SettingsListOptions::default()
         };
         options.extra.append("futureFilter".into(), "one".into());
         options.extra.append("futureFilter".into(), "two".into());
-        let result = SettingsClient::new(client).list_all(options).await.unwrap();
+        options
+            .extra
+            .append("syncToken".into(), "overridden-raw".into());
+        let original = options.clone();
+        let result = SettingsClient::new(client)
+            .sync("previous-sync", options.clone())
+            .await
+            .unwrap();
+        assert_eq!(options, original);
+        assert!(result.items[1].value.is_empty());
         assert_eq!(
             result
                 .items
@@ -269,9 +300,14 @@ mod tests {
             assert!(query
                 .iter()
                 .any(|pair| pair.0 == "maxResults" && pair.1 == "2"));
-            assert!(query
-                .iter()
-                .any(|pair| pair.0 == "syncToken" && pair.1 == "previous-sync"));
+            assert_eq!(
+                query
+                    .iter()
+                    .filter(|pair| pair.0 == "syncToken")
+                    .map(|pair| pair.1.as_ref())
+                    .collect::<Vec<_>>(),
+                ["previous-sync"]
+            );
             assert_eq!(
                 query
                     .iter()
@@ -286,6 +322,27 @@ mod tests {
                 .map(|pair| pair.1.as_ref());
             assert_eq!(token, [None, Some("middle +/"), Some("last")][index]);
         }
+    }
+
+    #[tokio::test]
+    async fn sync_expiration_requires_full_sync_without_retry_or_option_mutation() {
+        let (client, observed) = fixture(vec![(
+            410,
+            r#"{"error":{"code":410,"message":"Sync token expired"}}"#,
+        )])
+        .await;
+        let options = SettingsListOptions::default();
+        let original = options.clone();
+        let error = SettingsClient::new(client)
+            .sync("expired", options.clone())
+            .await
+            .unwrap_err();
+        assert!(error.requires_full_sync());
+        assert_eq!(error.status(), Some(reqwest::StatusCode::GONE));
+        assert_eq!(options, original);
+        let requests = observed.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].target.contains("syncToken=expired"));
     }
 
     #[tokio::test]

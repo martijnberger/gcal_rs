@@ -4,6 +4,8 @@ mod client;
 pub use client::EventClient;
 mod options;
 pub use options::*;
+mod patch;
+pub use patch::*;
 
 pub mod types;
 use types::{
