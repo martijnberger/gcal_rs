@@ -19,15 +19,30 @@ where
 
     fn query(&self) -> BTreeMap<String, String>;
 
+    /// Whether a mutation carries a JSON body. Bodyless POST actions override this.
+    fn has_body(&self) -> bool {
+        true
+    }
+
+    /// Additional request headers, such as an optimistic concurrency precondition.
+    ///
+    /// # Errors
+    /// Returns an error if a header cannot be encoded.
+    fn headers(&self) -> ClientResult<reqwest::header::HeaderMap> {
+        Ok(reqwest::header::HeaderMap::new())
+    }
+
     /// Build the full request URL.
     ///
     /// # Errors
     /// Returns an error if the generated URL is invalid.
     fn url(&self, action: Option<String>) -> ClientResult<Url> {
-        Ok(Url::parse_with_params(
-            &format!("{}/{}", BASE_URL, self.path(action)),
-            self.query(),
-        )?)
+        let mut url = Url::parse(&format!("{}/{}", BASE_URL, self.path(action)))?;
+        let query = self.query();
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+        Ok(url)
     }
 
     /// Serialize the request body.
