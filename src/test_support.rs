@@ -20,6 +20,13 @@ pub(crate) struct ObservedRequest {
 pub(crate) async fn fixture(
     responses: Vec<(u16, &'static str)>,
 ) -> (Arc<GCalClient>, JoinHandle<Vec<ObservedRequest>>) {
+    fixture_with_content_type(responses, "application/json").await
+}
+
+pub(crate) async fn fixture_with_content_type(
+    responses: Vec<(u16, &'static str)>,
+    content_type: &'static str,
+) -> (Arc<GCalClient>, JoinHandle<Vec<ObservedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = url::Url::parse(&format!(
         "http://{}/calendar/v3/",
@@ -64,7 +71,7 @@ pub(crate) async fn fixture(
                 .unwrap()
                 .canonical_reason()
                 .unwrap_or("Response");
-            stream.write_all(format!("HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            stream.write_all(format!("HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         }
         requests
     });

@@ -1,4 +1,4 @@
-//! Calendar resources and calendar-list reads.
+//! Calendar metadata, lifecycle operations, and per-user calendar-list preferences.
 //!
 //! `CalendarListClient::list_page` returns continuation and synchronization
 //! tokens unchanged; `list_all` and `list` follow all continuation pages,
@@ -8,6 +8,15 @@
 //! Sparse and deleted list entries may omit their access role; it is represented
 //! by `Option<CalendarAccessRole>`. Unknown roles and nested string-enum values
 //! round-trip as `Unknown(String)` rather than failing deserialization.
+//!
+//! Use `CalendarClient` with `CalendarWrite`/`CalendarPatch` for metadata changes,
+//! and `CalendarListClient` with `CalendarListEntryWrite`/`CalendarListEntryPatch`
+//! for per-user preferences. These payloads exclude read-only response metadata.
+//! Patches distinguish omitted fields from JSON null and explicit empty values.
+//! Mutations accept optional ETag preconditions; HTTP 412 is surfaced unchanged.
+//! Calendar-list RGB writes require `CalendarListEntryOptions::color_rgb_format`.
+//! Ownership transfer uses a bodyless administrator action; clearing a calendar
+//! removes events, while deleting a secondary calendar removes the calendar itself.
 //!
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +29,12 @@ pub use list::*;
 
 mod types;
 pub use types::*;
+
+mod resource;
+pub use resource::*;
+
+mod write;
+pub use write::*;
 
 use crate::{QueryParams, Sendable};
 

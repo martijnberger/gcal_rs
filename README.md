@@ -129,6 +129,89 @@ version, and label version. Conference writes automatically use version 1 and re
 an explicitly conflicting version; writing or clearing attachments enables support.
 Default-options convenience methods remain available alongside `*_with_options`.
 
+## Resource coverage
+
+The typed clients cover all 38 Calendar v3 discovery methods (revision 20261021).
+`calendar_client()` retains its existing meaning: the user's **calendar list**.
+Use `calendars_client()` for calendar metadata and calendar lifecycle operations.
+
+| Factory | Operations |
+| --- | --- |
+| `calendars_client()` | get, insert, update, patch, delete, clear, transfer ownership |
+| `calendar_client()` | get, insert, update, patch, delete, list/page/sync, watch |
+| `event_client()` | get, insert, import, update, patch, delete, list/page/sync, instances, move, quick-add, watch |
+| `acl_client()` | get, insert, update, patch, delete, list/page/sync, watch |
+| `settings_client()` | get, list/page/sync, watch |
+| `freebusy_client()` | query, including per-calendar/group partial errors |
+| `colors_client()` | get calendar and event palettes |
+| `channels_client()` | stop a notification channel |
+| `batch_client()` | multipart operations with correlated per-item results |
+
+Use `CalendarWrite`/`CalendarPatch`, `CalendarListEntryWrite`/`CalendarListEntryPatch`,
+and `AclRuleWrite`/`AclRulePatch` rather than serializing response resources.
+Patches use the same `Patch` omission/null/value semantics as events; nested ACL
+scope patches preserve omitted scope properties. Conditional resource options carry
+`if_match`. Calendar deletion, clearing, and ownership transfer are destructive;
+they are distinct explicit calls, never side effects of removing a calendar-list entry.
+
+`examples/resources.rs` demonstrates read-only calendar, availability, colors, optional
+ACL, and batch reads:
+
+```sh
+GOOGLE_ACCESS_TOKEN=... cargo run --example resources
+# Optional: GOOGLE_CALENDAR_ID, GOOGLE_EVENT_ID, GOOGLE_READ_ACL=1.
+```
+
+Provide an access token with the scopes required by the selected operations.
+Inspect `FreeBusyResponse` calendar/group `errors` before treating an empty busy
+list as availability. HTTP success does not mean every lookup succeeded.
+
+## Notifications
+
+Create a `ChannelRequest::new(unique_id, https_webhook_url)`, set an unguessable
+`token`, then call the resource client's `watch` with its list options. The returned
+`Channel` supplies `id`, `resource_id`, and `expiration`; persist those for lifecycle
+management. Stop it with `channels_client().stop(ChannelStop::from(&channel))`.
+The `ChannelRequest` rustdoc includes a compiling subscribe/stop example.
+
+The library does not host or authenticate a webhook. Validate inbound
+`X-Goog-Channel-ID`, `X-Goog-Channel-Token`, and `X-Goog-Resource-ID` against stored
+subscriptions, handle initial synchronization notifications and registration races,
+and re-fetch changes through the API. Notifications are invalidation signals, not
+event payloads; tolerate duplicates and ordering differences. Renew before expiry
+with a new unique channel ID and stop obsolete subscriptions. Debug output redacts
+channel tokens, but serialized requests contain them.
+
+## Batch requests
+
+```rust
+use std::sync::Arc;
+use gcal_rs::{
+    BatchOperation, BatchRequest, ClientResult, Event, GCalClient, QueryParams,
+};
+
+async fn read_event(client: Arc<GCalClient>) -> ClientResult<Event> {
+    let mut batch = BatchRequest::new();
+    batch.push(
+        BatchOperation::event_get("primary", "event-id", QueryParams::new())?
+            .with_id("read-event")?,
+    )?;
+    let response = client.batch_client().send(batch).await?;
+    response.get("read-event")
+        .expect("the parser verifies every requested ID")
+        .json()
+}
+```
+
+Safe event constructors share ordinary write DTOs, conference/attachment semantics,
+and ETag options. `BatchOperation::raw` is an explicit escape hatch for other Calendar
+operations, not a replacement for typed clients. Requests contain 1–1000 operations.
+Multipart responses preserve each item's status, headers, body, and structured error;
+use `BatchItem::json` or `result` to surface per-item failures. An outer successful
+response can contain failed items. Results are correlated by ID and returned in
+request order, but server execution order is not guaranteed. Batches are not atomic;
+do not combine operations that depend on each other's successful completion.
+
 ## Security and dependency maintenance
 
 - API and OAuth requests require HTTPS and do not follow redirects. Callers receive

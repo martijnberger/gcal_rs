@@ -55,6 +55,17 @@ pub use error::*;
 mod patch;
 pub use patch::Patch;
 
+mod notifications;
+pub use notifications::*;
+mod acl;
+pub use acl::*;
+mod freebusy;
+pub use freebusy::*;
+mod colors;
+pub use colors::*;
+mod batch;
+pub use batch::*;
+
 mod request;
 
 #[cfg(test)]

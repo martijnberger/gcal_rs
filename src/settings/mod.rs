@@ -53,7 +53,8 @@ impl SettingRequest {
     /// Create a new request for a specific setting.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use gcal_rs::SettingRequest;
     /// let req = SettingRequest::new("timezone");
     /// ```
     #[must_use]
