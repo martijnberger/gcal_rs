@@ -72,4 +72,10 @@ Completed discovery event/nested/calendar/settings fields, lossless unknown enum
 
 Verification: 34 tests passed, public rustdoc compiled, strict Clippy passed. An executable smoke round-tripped sparse/future official-shaped payloads, encoded repeated filters, and observed a structured real Google 401 from the new page API. No authenticated mutations were made.
 
-Phases 3–4 remain to be implemented in the subsequent stack changes.
+### Phase 3 completed
+
+Implemented event/calendar/settings sync wrappers, full delta pagination and final token handling, pre-transport sync-filter validation (including raw extras), and explicit 410 full-resync detection. Typed event patches distinguish omission/null/value, ETag mutation preconditions preserve 412 conflicts, and per-endpoint write options support notifications/conference/attachments/labels.
+
+Verification: 46 tests passed, public rustdoc compiled, strict Clippy passed after deleting an unused intermediate query helper. The executable smoke verified patch clear/false/omission, local rejection of incompatible sync filters, and structured HTTP 401 from a real Google sync read. No authenticated mutations were made.
+
+Phase 4 remains to be implemented in the subsequent stack change.

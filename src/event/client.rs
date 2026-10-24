@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use super::options::EventWriteMethod;
 use super::{
-    collection_path, item_path, Event, EventInstancesOptions, EventListOptions, EventWrite, Events,
-    SendUpdates,
+    collection_path, item_path, Event, EventGetOptions, EventInstancesOptions, EventListOptions,
+    EventPatch, EventWrite, EventWriteOptions, Events, SendUpdates,
 };
 use crate::request::ApiRequest;
 use crate::{ClientResult, GCalClient};
@@ -10,20 +11,23 @@ use crate::{ClientResult, GCalClient};
 /// `EventClient` is the method of managing events from a specific calendar. Requires a Google
 /// Calendar client.
 #[derive(Debug, Clone)]
-pub struct EventClient(Arc<GCalClient>);
+pub struct EventClient(pub(crate) Arc<GCalClient>);
 
-fn write_request(path: String, event: EventWrite) -> ApiRequest<EventWrite> {
-    let supports_attachments = event
-        .attachments
-        .as_ref()
-        .is_some_and(|items| !items.is_empty());
+fn write_request(
+    path: String,
+    event: EventWrite,
+    options: &EventWriteOptions,
+    method: EventWriteMethod,
+) -> ClientResult<ApiRequest<EventWrite>> {
+    let query = options.payload_query(
+        method,
+        event.conference_data.is_some(),
+        event.attachments.is_some(),
+    )?;
     let mut request = ApiRequest::with_body(path, event);
-    if supports_attachments {
-        request
-            .query
-            .insert("supportsAttachments".to_string(), "true".to_string());
-    }
-    request
+    request.query = query;
+    request.if_match.clone_from(&options.if_match);
+    Ok(request)
 }
 
 impl EventClient {
@@ -38,7 +42,30 @@ impl EventClient {
     /// # Errors
     /// Returns an error if the request fails.
     pub async fn delete(&self, event: Event) -> ClientResult<()> {
-        self.0.delete(None, event).await?;
+        self.delete_with_options(
+            &event.calendar_id,
+            &event.id,
+            EventWriteOptions {
+                extra: event.query_string,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Delete by ID, optionally sending notifications and an `If-Match` ETag.
+    /// # Errors
+    /// Returns transport and API errors, including stale-ETag HTTP 412.
+    pub async fn delete_with_options(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        options: EventWriteOptions,
+    ) -> ClientResult<()> {
+        let mut request = ApiRequest::new(item_path(calendar_id, event_id));
+        request.query = options.query_for(EventWriteMethod::Delete);
+        request.if_match = options.if_match;
+        self.0.delete(None, request).await?;
         Ok(())
     }
 
@@ -47,7 +74,21 @@ impl EventClient {
     /// # Errors
     /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn get(&self, calendar_id: String, event_id: String) -> ClientResult<Event> {
-        let request = ApiRequest::new(item_path(&calendar_id, &event_id));
+        self.get_with_options(calendar_id, event_id, EventGetOptions::default())
+            .await
+    }
+
+    /// Retrieve an event with attendee and time-zone response options.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn get_with_options(
+        &self,
+        calendar_id: String,
+        event_id: String,
+        options: EventGetOptions,
+    ) -> ClientResult<Event> {
+        let mut request = ApiRequest::new(item_path(&calendar_id, &event_id));
+        request.query = options.query();
         let mut event = self.0.get(None, request).await?.json::<Event>().await?;
         event.calendar_id = calendar_id;
         Ok(event)
@@ -59,7 +100,25 @@ impl EventClient {
     /// # Errors
     /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn import(&self, calendar_id: String, event: EventWrite) -> ClientResult<Event> {
-        let request = write_request(format!("{}/import", collection_path(&calendar_id)), event);
+        self.import_with_options(calendar_id, event, EventWriteOptions::default())
+            .await
+    }
+
+    /// Import with conference, attachment, and event-label API options.
+    /// # Errors
+    /// Returns validation, API, transport, or decoding errors.
+    pub async fn import_with_options(
+        &self,
+        calendar_id: String,
+        event: EventWrite,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
+        let request = write_request(
+            format!("{}/import", collection_path(&calendar_id)),
+            event,
+            &options,
+            EventWriteMethod::Import,
+        )?;
         let mut event = self.0.post(None, request).await?.json::<Event>().await?;
         event.calendar_id = calendar_id;
         Ok(event)
@@ -70,7 +129,25 @@ impl EventClient {
     /// # Errors
     /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn insert(&self, calendar_id: String, event: EventWrite) -> ClientResult<Event> {
-        let request = write_request(collection_path(&calendar_id), event);
+        self.insert_with_options(calendar_id, event, EventWriteOptions::default())
+            .await
+    }
+
+    /// Insert with explicit notification and conference options.
+    /// # Errors
+    /// Returns validation, API, transport, or decoding errors.
+    pub async fn insert_with_options(
+        &self,
+        calendar_id: String,
+        event: EventWrite,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
+        let request = write_request(
+            collection_path(&calendar_id),
+            event,
+            &options,
+            EventWriteMethod::Insert,
+        )?;
         let mut event = self.0.post(None, request).await?.json::<Event>().await?;
         event.calendar_id = calendar_id;
         Ok(event)
@@ -138,6 +215,7 @@ impl EventClient {
     ) -> ClientResult<Events> {
         let mut request = ApiRequest::new(collection_path(calendar_id));
         request.query = options.query();
+        EventListOptions::validate(&request.query)?;
         let mut page = self.0.get(None, request).await?.json::<Events>().await?;
         page.add_calendar(calendar_id);
         Ok(page)
@@ -160,6 +238,22 @@ impl EventClient {
             result.next_sync_token = page.next_sync_token;
         }
         Ok(result)
+    }
+
+    /// Collect every incremental page, retaining deleted events and the final token.
+    ///
+    /// Keep all other options identical to the full sync that produced `sync_token`.
+    /// HTTP 410 is returned unchanged; the caller owns full-sync recovery and storage.
+    /// # Errors
+    /// Returns incompatible-filter validation, API, transport, or decoding errors.
+    pub async fn sync(
+        &self,
+        calendar_id: &str,
+        sync_token: impl Into<String>,
+        mut options: EventListOptions,
+    ) -> ClientResult<Events> {
+        options.sync_token = Some(sync_token.into());
+        self.list_all(calendar_id, options).await
     }
 
     /// List every event in a time window, expanding recurring events.
@@ -197,19 +291,37 @@ impl EventClient {
         destination: String,
         send_updates: Option<SendUpdates>,
     ) -> ClientResult<Event> {
-        let mut request =
-            ApiRequest::new(format!("{}/move", item_path(&event.calendar_id, &event.id)));
-        request.query = event.query_string;
+        let mut extra = event.query_string;
+        extra.remove("sendUpdates");
+        self.move_to_calendar_with_options(
+            &event.calendar_id,
+            &event.id,
+            destination,
+            EventWriteOptions {
+                send_updates,
+                extra,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Move an event with notification options and optional ETag.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn move_to_calendar_with_options(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        destination: String,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
+        let mut request = ApiRequest::new(format!("{}/move", item_path(calendar_id, event_id)));
+        request.query = options.query_for(EventWriteMethod::Move);
         request
             .query
-            .insert("destination".to_string(), destination.clone());
-        if let Some(send_updates) = send_updates {
-            request
-                .query
-                .insert("sendUpdates".to_string(), send_updates.to_string());
-        } else {
-            request.query.remove("sendUpdates");
-        }
+            .insert("destination".into(), destination.clone());
+        request.if_match = options.if_match;
         let mut event = self.0.post(None, request).await?.json::<Event>().await?;
         event.calendar_id = destination;
         Ok(event)
@@ -220,7 +332,21 @@ impl EventClient {
     /// # Errors
     /// Returns an error if the request fails or the response cannot be parsed.
     pub async fn add(&self, calendar_id: String, text: String) -> ClientResult<Event> {
+        self.add_with_options(calendar_id, text, EventWriteOptions::default())
+            .await
+    }
+
+    /// Quick-add natural-language text with explicit notification options.
+    /// # Errors
+    /// Returns API, transport, or decoding errors.
+    pub async fn add_with_options(
+        &self,
+        calendar_id: String,
+        text: String,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
         let mut request = ApiRequest::new(format!("{}/quickAdd", collection_path(&calendar_id)));
+        request.query = options.query_for(EventWriteMethod::QuickAdd);
         request.query.insert("text".to_string(), text);
         let mut event = self.0.post(None, request).await?.json::<Event>().await?;
         event.calendar_id = calendar_id;
@@ -238,8 +364,65 @@ impl EventClient {
         event_id: String,
         event: EventWrite,
     ) -> ClientResult<Event> {
-        let request = write_request(item_path(&calendar_id, &event_id), event);
+        self.update_with_options(calendar_id, event_id, event, EventWriteOptions::default())
+            .await
+    }
+
+    /// Replace writable properties, optionally conditional on the supplied ETag.
+    /// # Errors
+    /// Returns validation, API (including HTTP 412), transport, or decoding errors.
+    pub async fn update_with_options(
+        &self,
+        calendar_id: String,
+        event_id: String,
+        event: EventWrite,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
+        let request = write_request(
+            item_path(&calendar_id, &event_id),
+            event,
+            &options,
+            EventWriteMethod::Update,
+        )?;
         let mut event = self.0.put(None, request).await?.json::<Event>().await?;
+        event.calendar_id = calendar_id;
+        Ok(event)
+    }
+
+    /// Apply only explicitly supplied changes to the selected event.
+    /// # Errors
+    /// Returns validation, API, transport, or decoding errors.
+    pub async fn patch(
+        &self,
+        calendar_id: String,
+        event_id: String,
+        event: EventPatch,
+    ) -> ClientResult<Event> {
+        self.patch_with_options(calendar_id, event_id, event, EventWriteOptions::default())
+            .await
+    }
+
+    /// Apply partial changes, optionally conditional on an `If-Match` ETag.
+    ///
+    /// Explicit conference clears also require conference data version 1.
+    /// # Errors
+    /// Returns validation, API (including HTTP 412), transport, or decoding errors.
+    pub async fn patch_with_options(
+        &self,
+        calendar_id: String,
+        event_id: String,
+        event: EventPatch,
+        options: EventWriteOptions,
+    ) -> ClientResult<Event> {
+        let query = options.payload_query(
+            EventWriteMethod::Patch,
+            !event.conference_data.is_unset(),
+            !event.attachments.is_unset(),
+        )?;
+        let mut request = ApiRequest::with_body(item_path(&calendar_id, &event_id), event);
+        request.query = query;
+        request.if_match = options.if_match;
+        let mut event = self.0.patch(None, request).await?.json::<Event>().await?;
         event.calendar_id = calendar_id;
         Ok(event)
     }
@@ -247,9 +430,13 @@ impl EventClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, EventClient, EventWrite, SendUpdates};
-    use crate::event::types::EventAttachmentWrite;
+    use super::{
+        Event, EventClient, EventGetOptions, EventListOptions, EventPatch, EventWrite,
+        EventWriteOptions, SendUpdates,
+    };
+    use crate::event::types::{EventAttachmentWrite, EventConferenceDataWrite, EventStatus};
     use crate::test_support::fixture;
+    use crate::{ClientError, Patch, QueryParams};
 
     #[tokio::test]
     async fn writes_use_collection_and_item_paths_with_only_explicit_payload_fields() {
@@ -471,6 +658,398 @@ mod tests {
                     .map(|(_, v)| v.as_ref()),
                 expected
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn incremental_sync_collects_deleted_items_and_the_final_token() {
+        let (transport, observed) = fixture(vec![
+            (200, r#"{"items":[{"id":"changed"}],"nextPageToken":"second"}"#),
+            (200, r#"{"items":[],"nextPageToken":"third"}"#),
+            (200, r#"{"items":[{"id":"deleted","status":"cancelled"}],"nextSyncToken":"replacement"}"#),
+        ])
+        .await;
+        let result = transport
+            .event_client()
+            .sync(
+                "team/a@example.com",
+                "previous",
+                EventListOptions {
+                    max_results: Some(10),
+                    show_deleted: Some(true),
+                    single_events: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert_eq!(result.items[1].id, "deleted");
+        assert_eq!(result.items[1].status, EventStatus::Cancelled);
+        assert!(result
+            .items
+            .iter()
+            .all(|event| event.calendar_id == "team/a@example.com"));
+        assert_eq!(result.next_sync_token.as_deref(), Some("replacement"));
+        assert!(result.next_page_token.is_none());
+        let requests = observed.await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            let query: std::collections::BTreeMap<_, _> = url.query_pairs().collect();
+            assert_eq!(query.get("syncToken").unwrap(), "previous");
+            assert_eq!(query.get("maxResults").unwrap(), "10");
+            assert_eq!(query.get("showDeleted").unwrap(), "true");
+            assert_eq!(
+                query.get("pageToken").map(|value| value.as_ref()),
+                [None, Some("second"), Some("third")][index]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_rejects_typed_and_raw_incompatible_filters_before_network() {
+        let (transport, observed) = fixture(vec![(200, "{}")]).await;
+        let client = transport.event_client();
+        for options in [
+            EventListOptions {
+                time_min: Some("2026-01-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                time_max: Some("2027-01-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                updated_min: Some("2026-01-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                q: Some("meeting".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                ical_uid: Some("uid".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                order_by: Some("updated".into()),
+                ..Default::default()
+            },
+            EventListOptions {
+                private_extended_property: vec!["a=b".into()],
+                ..Default::default()
+            },
+            EventListOptions {
+                shared_extended_property: vec!["a=b".into()],
+                ..Default::default()
+            },
+            EventListOptions {
+                show_deleted: Some(false),
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                client.sync("primary", "old", options).await,
+                Err(ClientError::InvalidRequest(_))
+            ));
+        }
+        for (key, value) in [
+            ("timeMin", "2026-01-01T00:00:00Z"),
+            ("timeMax", "2027-01-01T00:00:00Z"),
+            ("updatedMin", "2026-01-01T00:00:00Z"),
+            ("q", "meeting"),
+            ("iCalUID", "uid"),
+            ("orderBy", "updated"),
+            ("privateExtendedProperty", "a=b"),
+            ("sharedExtendedProperty", "a=b"),
+            ("showDeleted", "false"),
+        ] {
+            let mut extra = QueryParams::new();
+            extra.append("syncToken".into(), "raw-token".into());
+            extra.append(key.into(), value.into());
+            let options = EventListOptions {
+                extra,
+                ..Default::default()
+            };
+            assert!(matches!(
+                client.list_page("primary", &options).await,
+                Err(ClientError::InvalidRequest(_))
+            ));
+        }
+        client
+            .list_page("primary", &EventListOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(observed.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_sync_tokens_are_returned_without_retry() {
+        let (transport, observed) = fixture(vec![
+            (410, r#"{"error":{"message":"Sync token is no longer valid","errors":[{"reason":"fullSyncRequired"}]}}"#),
+        ]).await;
+        let error = transport
+            .event_client()
+            .sync("primary", "expired", EventListOptions::default())
+            .await
+            .unwrap_err();
+        assert!(error.requires_full_sync());
+        assert_eq!(error.status(), Some(reqwest::StatusCode::GONE));
+        assert_eq!(observed.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn patch_preserves_omission_null_false_and_empty_and_enables_capabilities() {
+        let (transport, observed) = fixture(vec![(200, r#"{"id":"event"}"#)]).await;
+        let result = transport
+            .event_client()
+            .patch_with_options(
+                "team/a".into(),
+                "event/id".into(),
+                EventPatch {
+                    description: Patch::Null,
+                    summary: Patch::Value(String::new()),
+                    guests_can_invite_others: Patch::Value(false),
+                    attendees: Patch::Value(Vec::new()),
+                    attachments: Patch::Value(Vec::new()),
+                    conference_data: Patch::Null,
+                    ..Default::default()
+                },
+                EventWriteOptions {
+                    send_updates: Some(SendUpdates::All),
+                    supports_attachments: Some(false),
+                    if_match: Some("\"current\"".into()),
+                    event_label_version: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.calendar_id, "team/a");
+        let requests = observed.await.unwrap();
+        assert_eq!(requests[0].method, "PATCH");
+        assert_eq!(requests[0].headers.get("if-match").unwrap(), "\"current\"");
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "description": null, "summary": "", "guestsCanInviteOthers": false,
+                "attendees": [], "attachments": [], "conferenceData": null
+            })
+        );
+        let url = url::Url::parse(&format!("http://fixture{}", requests[0].target)).unwrap();
+        assert_eq!(
+            url.path(),
+            "/calendar/v3/calendars/team%2Fa/events/event%2Fid"
+        );
+        let query: std::collections::BTreeMap<_, _> = url.query_pairs().collect();
+        assert_eq!(query.get("supportsAttachments").unwrap(), "true");
+        assert_eq!(query.get("conferenceDataVersion").unwrap(), "1");
+        assert_eq!(query.get("sendUpdates").unwrap(), "all");
+        assert_eq!(query.get("eventLabelVersion").unwrap(), "1");
+    }
+
+    #[tokio::test]
+    async fn conditional_patch_update_and_delete_preserve_http_412() {
+        let (transport, observed) =
+            fixture(vec![(412, r#"{"error":{"message":"stale etag"}}"#); 3]).await;
+        let client = transport.event_client();
+        let options = EventWriteOptions {
+            if_match: Some("\"stale\"".into()),
+            send_updates: Some(SendUpdates::ExternalOnly),
+            ..Default::default()
+        };
+        let errors = [
+            client
+                .patch_with_options(
+                    "primary".into(),
+                    "event".into(),
+                    EventPatch::default(),
+                    options.clone(),
+                )
+                .await
+                .unwrap_err(),
+            client
+                .update_with_options(
+                    "primary".into(),
+                    "event".into(),
+                    EventWrite::default(),
+                    options.clone(),
+                )
+                .await
+                .unwrap_err(),
+            client
+                .delete_with_options("primary", "event", options)
+                .await
+                .unwrap_err(),
+        ];
+        assert!(errors
+            .iter()
+            .all(|error| error.status() == Some(reqwest::StatusCode::PRECONDITION_FAILED)));
+        let requests = observed.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            ["PATCH", "PUT", "DELETE"]
+        );
+        for request in &requests {
+            assert_eq!(request.headers.get("if-match").unwrap(), "\"stale\"");
+            assert!(request.target.contains("sendUpdates=externalOnly"));
+        }
+        assert!(requests[2].body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn conference_version_conflicts_fail_before_network_and_defaults_use_version_one() {
+        let (transport, observed) = fixture(vec![(200, "{}"); 2]).await;
+        let client = transport.event_client();
+        let write = EventWrite {
+            conference_data: Some(EventConferenceDataWrite::default()),
+            ..Default::default()
+        };
+        let mut extra = QueryParams::new();
+        extra.append("conferenceDataVersion".into(), "0".into());
+        for options in [
+            EventWriteOptions {
+                conference_data_version: Some(0),
+                ..Default::default()
+            },
+            EventWriteOptions {
+                extra,
+                ..Default::default()
+            },
+        ] {
+            assert!(matches!(
+                client
+                    .insert_with_options("primary".into(), write.clone(), options.clone())
+                    .await,
+                Err(ClientError::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                client
+                    .patch_with_options(
+                        "primary".into(),
+                        "event".into(),
+                        EventPatch {
+                            conference_data: Patch::Null,
+                            ..Default::default()
+                        },
+                        options,
+                    )
+                    .await,
+                Err(ClientError::InvalidRequest(_))
+            ));
+        }
+        client
+            .insert("primary".into(), write.clone())
+            .await
+            .unwrap();
+        client
+            .update("primary".into(), "event".into(), write)
+            .await
+            .unwrap();
+        let requests = observed.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            assert!(request.target.ends_with("?conferenceDataVersion=1"));
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_options_only_send_supported_typed_parameters() {
+        let (transport, observed) = fixture(vec![(200, "{}"); 6]).await;
+        let client = transport.event_client();
+        let options = EventWriteOptions {
+            send_updates: Some(SendUpdates::None),
+            send_notifications: Some(false),
+            conference_data_version: Some(1),
+            supports_attachments: Some(true),
+            max_attendees: Some(7),
+            always_include_email: Some(false),
+            event_label_version: Some(1),
+            ..Default::default()
+        };
+        client
+            .import_with_options("primary".into(), EventWrite::default(), options.clone())
+            .await
+            .unwrap();
+        client
+            .add_with_options("primary".into(), "Lunch".into(), options.clone())
+            .await
+            .unwrap();
+        client
+            .move_to_calendar_with_options(
+                "primary",
+                "event",
+                "destination".into(),
+                options.clone(),
+            )
+            .await
+            .unwrap();
+        client
+            .delete_with_options("primary", "event", options.clone())
+            .await
+            .unwrap();
+        client
+            .update_with_options(
+                "primary".into(),
+                "event".into(),
+                EventWrite::default(),
+                options,
+            )
+            .await
+            .unwrap();
+        client
+            .get_with_options(
+                "primary".into(),
+                "event".into(),
+                EventGetOptions {
+                    max_attendees: Some(3),
+                    time_zone: Some("Europe/Copenhagen".into()),
+                    always_include_email: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let requests = observed.await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            let url = url::Url::parse(&format!("http://fixture{}", request.target)).unwrap();
+            let query: std::collections::BTreeMap<_, _> = url.query_pairs().collect();
+            if index == 0 {
+                assert_eq!(query.len(), 3);
+                for key in [
+                    "conferenceDataVersion",
+                    "supportsAttachments",
+                    "eventLabelVersion",
+                ] {
+                    assert_eq!(
+                        query.get(key).unwrap(),
+                        if key == "supportsAttachments" {
+                            "true"
+                        } else {
+                            "1"
+                        }
+                    );
+                }
+            } else if index < 4 {
+                assert_eq!(query.get("sendUpdates").unwrap(), "none");
+                assert_eq!(query.get("sendNotifications").unwrap(), "false");
+                assert_eq!(query.len(), if index == 1 || index == 2 { 3 } else { 2 });
+            } else if index == 4 {
+                assert_eq!(query.get("maxAttendees").unwrap(), "7");
+                assert_eq!(query.get("alwaysIncludeEmail").unwrap(), "false");
+                assert_eq!(query.len(), 7);
+            } else {
+                assert_eq!(request.method, "GET");
+                assert!(request.body.is_empty());
+                assert_eq!(query.get("maxAttendees").unwrap(), "3");
+                assert_eq!(query.get("timeZone").unwrap(), "Europe/Copenhagen");
+                assert_eq!(query.get("alwaysIncludeEmail").unwrap(), "false");
+                assert_eq!(query.len(), 3);
+            }
         }
     }
 }

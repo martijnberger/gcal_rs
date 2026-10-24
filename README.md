@@ -105,6 +105,30 @@ field. `insert` replaces a single-valued key. Response enums retain future value
 as `Unknown(String)`; sparse nested fields are optional. Calendar access roles are
 optional on deleted entries, and recurrence lines retain their original order.
 
+## Synchronization and conditional patches
+
+Start with `list_all` and persist its `next_sync_token`. Subsequent
+`EventClient::sync(calendar_id, token, options)`, `CalendarListClient::sync`, and
+`SettingsClient::sync` collect the delta, including every continuation page.
+Keep other filters consistent; incompatible event/calendar sync filters are rejected
+before transport. Apply deletions to your store and persist the final token only
+after applying the complete delta.
+
+If `ClientError::requires_full_sync()` is true, Google returned HTTP 410. Rebuild
+your application's snapshot with a fresh full read; the library never erases storage
+or silently retries an expired token.
+
+Use `EventPatch` with `Patch::Unset` (omit), `Patch::Null` (clear), and
+`Patch::Value(value)` (set). Arrays replace the whole array.
+`patch_with_options`, `update_with_options`, and `delete_with_options` accept
+`EventWriteOptions::if_match` for ETag concurrency checks; HTTP 412 is returned
+without retrying a stale write.
+
+`EventWriteOptions` also controls notifications, attachment support, conference
+version, and label version. Conference writes automatically use version 1 and reject
+an explicitly conflicting version; writing or clearing attachments enables support.
+Default-options convenience methods remain available alongside `*_with_options`.
+
 ## Security and dependency maintenance
 
 - API and OAuth requests require HTTPS and do not follow redirects. Callers receive
