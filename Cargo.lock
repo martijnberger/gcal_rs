@@ -861,7 +861,7 @@ dependencies = [
 [[package]]
 name = "oauth2"
 version = "5.1.0"
-source = "git+https://github.com/martijnberger/oauth2-rs.git?rev=795424735e017fe14407d59c6988b31e73f8b03e#795424735e017fe14407d59c6988b31e73f8b03e"
+source = "git+https://github.com/martijnberger/oauth2-rs.git?rev=eaabb3b279d5c4839f804af9bfa0f07e4dc8731f#eaabb3b279d5c4839f804af9bfa0f07e4dc8731f"
 dependencies = [
  "base64 0.22.1",
  "chrono",

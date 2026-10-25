@@ -22,7 +22,7 @@ serde_json = "1"
 chrono = "0.4"
 url = "2"
 reqwest = { version = "0.13.5", features = ["gzip", "json"] }
-oauth2 = { git = "https://github.com/martijnberger/oauth2-rs.git", rev = "795424735e017fe14407d59c6988b31e73f8b03e", features = ["timing-resistant-secret-traits"] }
+oauth2 = { git = "https://github.com/martijnberger/oauth2-rs.git", rev = "eaabb3b279d5c4839f804af9bfa0f07e4dc8731f", features = ["timing-resistant-secret-traits"] }
 percent-encoding = "2.3.2"
 
 [dev-dependencies]

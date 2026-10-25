@@ -226,9 +226,11 @@ do not combine operations that depend on each other's successful completion.
   credentials. Do not log serialized tokens; protect persisted tokens with restrictive
   storage permissions.
 
-The OAuth dependency uses a revision-pinned fork over HTTPS for reqwest 0.13 support.
-Published oauth2 5.0 uses reqwest 0.12; switching to it would introduce a second
-HTTP/TLS dependency stack. Review the fork when upgrading OAuth.
+The OAuth dependency uses a revision-pinned fork over HTTPS for reqwest 0.13 support,
+including hardened transport defaults and redacted token parse diagnostics.
+Downstream applications using the same fork should pin the same Git revision to avoid
+resolving a second OAuth package. Published oauth2 5.0 uses reqwest 0.12; switching to
+it would introduce a second HTTP/TLS dependency stack. Review the fork when upgrading OAuth.
 
 To review updates and advisories:
 
